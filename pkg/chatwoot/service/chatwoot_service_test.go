@@ -96,8 +96,8 @@ func TestCreateLink_ProvisionsInboxAndPersistsFields(t *testing.T) {
 	if saved == nil || !saved.ChatwootEnabled || saved.ChatwootInboxID != "42" || saved.ChatwootWebhookSecret != "sek" {
 		t.Fatalf("instance fields not persisted: %+v", saved)
 	}
-	if saved.Events != event_types.MESSAGE {
-		t.Fatalf("expected instance to be subscribed to MESSAGE events, got Events=%q", saved.Events)
+	if saved.Events != event_types.MESSAGE+","+event_types.READ_RECEIPT {
+		t.Fatalf("expected instance to be subscribed to MESSAGE and READ_RECEIPT events, got Events=%q", saved.Events)
 	}
 }
 

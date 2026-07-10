@@ -166,7 +166,8 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 
 	instanceRepository := instance_repository.NewInstanceRepository(db)
 	chatwootConfigRepo := chatwoot_repository.NewChatwootConfigRepository(db)
-	chatwootProducer := chatwoot_producer.NewChatwootProducer(chatwootConfigRepo, instanceRepository, loggerWrapper)
+	chatwootMessageMapRepo := chatwoot_repository.NewMessageMapRepository(db)
+	chatwootProducer := chatwoot_producer.NewChatwootProducer(chatwootConfigRepo, instanceRepository, chatwootMessageMapRepo, loggerWrapper)
 	messageRepository := message_repository.NewMessageRepository(db)
 	labelRepository := label_repository.NewLabelRepository(db)
 
@@ -206,7 +207,7 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 		loggerWrapper,
 	)
 	chatwootAdmin := chatwoot_handler.NewAdminHandler(chatwootSvc)
-	chatwootWebhook := chatwoot_handler.NewWebhookHandler(instanceRepository, sendMessageService, chatwootConfigRepo, loggerWrapper)
+	chatwootWebhook := chatwoot_handler.NewWebhookHandler(instanceRepository, sendMessageService, chatwootConfigRepo, chatwootMessageMapRepo, loggerWrapper)
 	userService := user_service.NewUserService(clientPointer, whatsmeowService, loggerWrapper)
 	messageService := message_service.NewMessageService(clientPointer, messageRepository, whatsmeowService, loggerWrapper)
 	chatService := chat_service.NewChatService(clientPointer, whatsmeowService, loggerWrapper)

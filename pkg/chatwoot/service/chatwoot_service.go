@@ -127,7 +127,7 @@ func (s *ChatwootService) CreateLink(name string) (*CreateLinkResult, error) {
 	created.ChatwootInboxID = fmt.Sprintf("%d", inbox.ID)
 	created.ChatwootInboxIdentifier = inbox.Identifier
 	created.ChatwootWebhookSecret = inbox.Secret
-	created.Events = event_types.MESSAGE
+	created.Events = event_types.MESSAGE + "," + event_types.READ_RECEIPT
 	// Present as available so WhatsApp shows the delivery (second) check to the
 	// sender. whatsmeow only sends active delivery receipts while presence is
 	// available; without this the bridge sends "inactive" receipts (one check).
