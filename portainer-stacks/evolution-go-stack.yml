@@ -111,12 +111,16 @@ services:
     environment:
       MINIO_ROOT_USER: "${MINIO_ROOT_USER}"
       MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD}"
+      # URL pública (via Traefik) — o Chatwoot gera URLs presigned com esse host
+      # para o navegador do agente carregar os anexos.
+      MINIO_SERVER_URL: "https://${MINIO_DOMAIN:-s3.ritodesk.com.br}"
     volumes:
       - minio_data:/data
     networks:
       chatwoot-evo:
         aliases:
           - minio
+      traefik-public: {}
     healthcheck:
       test: ["CMD-SHELL", "mc ready local || exit 1"]
       interval: 30s
@@ -133,20 +137,30 @@ services:
         limits:
           memory: 512M
           cpus: '0.5'
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network=traefik-public"
+        - "traefik.http.routers.minio.rule=Host(`${MINIO_DOMAIN:-s3.ritodesk.com.br}`)"
+        - "traefik.http.routers.minio.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+        - "traefik.http.routers.minio.tls=true"
+        - "traefik.http.routers.minio.tls.certresolver=${TRAEFIK_CERTRESOLVER:-le}"
+        - "traefik.http.services.minio.loadbalancer.server.port=9000"
 
-  # One-shot: cria o bucket de mídia no MinIO. As credenciais vêm do ambiente e
-  # são lidas em runtime ($$ evita a interpolação do compose/Portainer).
+  # One-shot: cria os buckets no MinIO (mídia do evolution + storage do Chatwoot).
+  # As credenciais vêm do ambiente e são lidas em runtime ($$ evita a interpolação).
   minio-init:
     image: minio/mc:latest
     environment:
       MINIO_ROOT_USER: "${MINIO_ROOT_USER}"
       MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD}"
       MINIO_BUCKET: "${MINIO_BUCKET:-evolution-media}"
+      CW_STORAGE_BUCKET: "${CW_STORAGE_BUCKET:-chatwoot-storage}"
     entrypoint: ["sh", "-c"]
     command:
       - |
         until mc alias set m http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do sleep 2; done && \
-        mc mb -p "m/$$MINIO_BUCKET" || true
+        mc mb -p "m/$$MINIO_BUCKET" || true && \
+        mc mb -p "m/$$CW_STORAGE_BUCKET" || true
     networks:
       - chatwoot-evo
     deploy:

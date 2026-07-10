@@ -22,8 +22,10 @@ docker network create --driver overlay --attachable traefik-public
 |---|---|
 | `GLOBAL_API_KEY` | chave de auth da API do evolution (header `apikey`). Gere forte. |
 | `EVO_DB_PASSWORD` | senha do Postgres do evolution |
-| `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | credenciais do MinIO |
-| `MINIO_BUCKET` | bucket de mídia (default `evolution-media`) |
+| `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | credenciais do MinIO (compartilhado com o Chatwoot) |
+| `MINIO_BUCKET` | bucket de mídia do evolution (default `evolution-media`) |
+| `CW_STORAGE_BUCKET` | bucket de storage do Chatwoot (default `chatwoot-storage`) |
+| `MINIO_DOMAIN` | domínio público do MinIO via Traefik (default `s3.ritodesk.com.br`) |
 | `CHATWOOT_SELF_URL` | URL deste evolution alcançável pelo Chatwoot; default `http://evolution-go:8080` (rede interna). Gravada no `webhook_url` das inboxes. |
 | `IMAGE_TAG` | tag da imagem (default `latest`) |
 | `EVO_DOMAIN` | default `evo.ritodesk.com.br` |
@@ -42,4 +44,5 @@ docker network create --driver overlay --attachable traefik-public
 
 - O patch de licença offline está na imagem; ativa com o `GLOBAL_API_KEY` sem contatar servidor externo.
 - Mídia usa MinIO (`MINIO_ENABLED=true`): o conector baixa a URL presigned interna e reenvia ao Chatwoot.
+- **MinIO é compartilhado** com o Chatwoot (que o usa para o próprio storage, bucket `chatwoot-storage`). Suba **esta stack primeiro**. Aponte o DNS de `s3.ritodesk.com.br` (`MINIO_DOMAIN`) para o Traefik — o navegador do agente carrega os anexos do Chatwoot por esse host.
 - Webhook do Traefik do Portainer: configure o secret `PORTAINER_WEBHOOK_URL_EVOLUTION` no GitHub para auto-deploy no push.
