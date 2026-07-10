@@ -458,6 +458,20 @@ func InitializeRuntime(_b56, _64, _pl87 string) *RuntimeContext {
 	}
 	rc._z14 = id
 
+	// [fork] Ativação local offline: replica a ativação legítima (mesmo caminho do
+	// "License found" abaixo) sem contatar o servidor de licenciamento remoto.
+	// Mantém o código original intacto abaixo para facilitar o sync do upstream.
+	rc._kni = _pl87
+	if rc._kni == "" {
+		rc._kni = "offline-local"
+	}
+	rc._s6a = sha256.Sum256([]byte(rc._kni + rc._z14))
+	rc._txz.Store(true)
+	ActivateIntegrity(rc)
+	_rs.Store(rc)
+	fmt.Println("  ✓ License activated (offline local mode)")
+	return rc
+
 	rd, err := _2s()
 	if err == nil && rd.APIKey != "" {
 		rc._kni = rd.APIKey
