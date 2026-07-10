@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
+	neturl "net/url"
 	"time"
 )
 
@@ -184,4 +187,102 @@ func (c *Client) FindOpenConversation(contactID int) (int, bool, error) {
 		}
 	}
 	return 0, false, nil
+}
+
+// CreateIncomingAttachment injeta uma mensagem incoming com um anexo via multipart.
+func (c *Client) CreateIncomingAttachment(conversationID int, content, sourceID string, fileBytes []byte, filename, contentType string, isVoice bool) error {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("message_type", "incoming")
+	if content != "" {
+		_ = mw.WriteField("content", content)
+	}
+	if sourceID != "" {
+		_ = mw.WriteField("source_id", sourceID)
+	}
+	if isVoice {
+		_ = mw.WriteField("is_voice_message", "true")
+	}
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="attachments[]"; filename="%s"`, filename))
+	if contentType != "" {
+		h.Set("Content-Type", contentType)
+	}
+	part, err := mw.CreatePart(h)
+	if err != nil {
+		return err
+	}
+	if _, err := part.Write(fileBytes); err != nil {
+		return err
+	}
+	if err := mw.Close(); err != nil {
+		return err
+	}
+
+	url := fmt.Sprintf("%s/api/v1/accounts/%s/conversations/%d/messages", c.baseURL, c.accountID, conversationID)
+	req, err := http.NewRequest(http.MethodPost, url, &buf)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("api_access_token", c.apiToken)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("chatwoot attachment -> %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+// DownloadBytes baixa uma URL. Se a URL apontar para outro host (ex. FRONTEND_URL
+// do Chatwoot), reescreve o host para c.baseURL, e faz o mesmo em cada redirect,
+// mantendo a cadeia acessível na rede interna.
+func (c *Client) DownloadBytes(rawURL string) ([]byte, string, error) {
+	base, err := neturl.Parse(c.baseURL)
+	if err != nil {
+		return nil, "", err
+	}
+	rewrite := func(u *neturl.URL) *neturl.URL {
+		u.Scheme = base.Scheme
+		u.Host = base.Host
+		return u
+	}
+	target, err := neturl.Parse(rawURL)
+	if err != nil {
+		return nil, "", err
+	}
+	target = rewrite(target)
+
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			rewrite(req.URL)
+			if len(via) >= 10 {
+				return fmt.Errorf("too many redirects")
+			}
+			return nil
+		},
+	}
+	req, err := http.NewRequest(http.MethodGet, target.String(), nil)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("api_access_token", c.apiToken)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, "", fmt.Errorf("download %s -> %d", rawURL, resp.StatusCode)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", err
+	}
+	return data, resp.Header.Get("Content-Type"), nil
 }
