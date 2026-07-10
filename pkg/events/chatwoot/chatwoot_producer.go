@@ -74,6 +74,16 @@ type chatwootProducer struct {
 	loggerWrapper *logger_wrapper.LoggerManager
 	// cache jid -> conversationID por instância, para pular lookups
 	convCache sync.Map // key: instanceID+"|"+jid  value: convCacheEntry
+	// keyLocks serializa a seção check-then-create de contato/conversa por cacheKey,
+	// evitando que duas goroutines para o mesmo JID criem conversas duplicadas.
+	// JIDs diferentes continuam processando em paralelo.
+	keyLocks sync.Map // key: cacheKey (string)  value: *sync.Mutex
+}
+
+// lockKey retorna (criando se necessário) o mutex associado a cacheKey.
+func (p *chatwootProducer) lockKey(cacheKey string) *sync.Mutex {
+	m, _ := p.keyLocks.LoadOrStore(cacheKey, &sync.Mutex{})
+	return m.(*sync.Mutex)
 }
 
 type convCacheEntry struct {
@@ -124,6 +134,21 @@ func (p *chatwootProducer) handle(payload []byte, userID string) {
 	inboxID := atoi(instance.ChatwootInboxID)
 
 	cacheKey := msg.InstanceID + "|" + msg.JID
+	if v, ok := p.convCache.Load(cacheKey); ok {
+		entry := v.(convCacheEntry)
+		if err := client.CreateIncomingMessage(entry.ConversationID, msg.Text, msg.Wamid); err != nil {
+			log.LogError("[%s] chatwoot: falha ao injetar mensagem: %v", userID, err)
+		}
+		return
+	}
+
+	// Serializa check-then-create por cacheKey (instância+JID), para que duas
+	// mensagens concorrentes do mesmo contato não criem conversas duplicadas.
+	// JIDs diferentes possuem mutexes distintos e continuam em paralelo.
+	mu := p.lockKey(cacheKey)
+	mu.Lock()
+	defer mu.Unlock()
+
 	if v, ok := p.convCache.Load(cacheKey); ok {
 		entry := v.(convCacheEntry)
 		if err := client.CreateIncomingMessage(entry.ConversationID, msg.Text, msg.Wamid); err != nil {
