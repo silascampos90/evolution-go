@@ -23,13 +23,15 @@ import (
 
 	call_handler "github.com/evolution-foundation/evolution-go/pkg/call/handler"
 	call_service "github.com/evolution-foundation/evolution-go/pkg/call/service"
-	chatwoot_model "github.com/evolution-foundation/evolution-go/pkg/chatwoot/model"
 	chat_handler "github.com/evolution-foundation/evolution-go/pkg/chat/handler"
 	chat_service "github.com/evolution-foundation/evolution-go/pkg/chat/service"
+	chatwoot_model "github.com/evolution-foundation/evolution-go/pkg/chatwoot/model"
+	chatwoot_repository "github.com/evolution-foundation/evolution-go/pkg/chatwoot/repository"
 	community_handler "github.com/evolution-foundation/evolution-go/pkg/community/handler"
 	community_service "github.com/evolution-foundation/evolution-go/pkg/community/service"
 	config "github.com/evolution-foundation/evolution-go/pkg/config"
 	"github.com/evolution-foundation/evolution-go/pkg/core"
+	chatwoot_producer "github.com/evolution-foundation/evolution-go/pkg/events/chatwoot"
 	producer_interfaces "github.com/evolution-foundation/evolution-go/pkg/events/interfaces"
 	nats_producer "github.com/evolution-foundation/evolution-go/pkg/events/nats"
 	rabbitmq_producer "github.com/evolution-foundation/evolution-go/pkg/events/rabbitmq"
@@ -160,6 +162,8 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 	}
 
 	instanceRepository := instance_repository.NewInstanceRepository(db)
+	chatwootConfigRepo := chatwoot_repository.NewChatwootConfigRepository(db)
+	chatwootProducer := chatwoot_producer.NewChatwootProducer(chatwootConfigRepo, instanceRepository, loggerWrapper)
 	messageRepository := message_repository.NewMessageRepository(db)
 	labelRepository := label_repository.NewLabelRepository(db)
 
@@ -178,6 +182,7 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 		exPath,
 		mediaStorage,
 		natsProducer,
+		chatwootProducer,
 		loggerWrapper,
 	)
 	instanceService := instance_service.NewInstanceService(
