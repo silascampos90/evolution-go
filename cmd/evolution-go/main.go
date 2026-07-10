@@ -206,7 +206,7 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 		loggerWrapper,
 	)
 	chatwootAdmin := chatwoot_handler.NewAdminHandler(chatwootSvc)
-	chatwootWebhook := chatwoot_handler.NewWebhookHandler(instanceRepository, sendMessageService, loggerWrapper)
+	chatwootWebhook := chatwoot_handler.NewWebhookHandler(instanceRepository, sendMessageService, chatwootConfigRepo, loggerWrapper)
 	userService := user_service.NewUserService(clientPointer, whatsmeowService, loggerWrapper)
 	messageService := message_service.NewMessageService(clientPointer, messageRepository, whatsmeowService, loggerWrapper)
 	chatService := chat_service.NewChatService(clientPointer, whatsmeowService, loggerWrapper)
