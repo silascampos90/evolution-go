@@ -1,0 +1,171 @@
+version: '3.8'
+
+# Stack de produção do evolution-go (API de WhatsApp) + Postgres + MinIO.
+# Ingress via Traefik (evo.ritodesk.com.br). Comunica com o Chatwoot pela rede
+# overlay externa compartilhada `chatwoot-evo`. O evolution cria os bancos
+# evogo_auth/evogo_users automaticamente no primeiro boot.
+
+services:
+  evolution-go:
+    image: ${DOCKER_REGISTRY:-ghcr.io/silascampos90}/evolution-go:${IMAGE_TAG:-latest}
+    environment:
+      SERVER_PORT: "8080"
+      CLIENT_NAME: "evolution"
+      OS_NAME: "Evolution GO"
+      GLOBAL_API_KEY: "${GLOBAL_API_KEY}"          # DEFINA um valor forte
+      POSTGRES_AUTH_DB: "postgresql://postgres:${EVO_DB_PASSWORD}@evolution-postgres:5432/evogo_auth?sslmode=disable"
+      POSTGRES_USERS_DB: "postgresql://postgres:${EVO_DB_PASSWORD}@evolution-postgres:5432/evogo_users?sslmode=disable"
+      DATABASE_SAVE_MESSAGES: "false"
+      WADEBUG: "INFO"
+      LOGTYPE: "console"
+      CONNECT_ON_STARTUP: "true"
+      # URL pública DESTE evolution-go, gravada no webhook_url de cada inbox.
+      # Na rede interna o Chatwoot chama pelo alias; use o domínio público só se
+      # o Chatwoot estiver fora da rede compartilhada.
+      CHATWOOT_SELF_URL: "${CHATWOOT_SELF_URL:-http://evolution-go:8080}"
+      # Mídia via MinIO (URLs presigned; baixadas pelo conector e reenviadas ao Chatwoot).
+      MINIO_ENABLED: "true"
+      MINIO_ENDPOINT: "minio:9000"
+      MINIO_ACCESS_KEY: "${MINIO_ROOT_USER}"
+      MINIO_SECRET_KEY: "${MINIO_ROOT_PASSWORD}"
+      MINIO_BUCKET: "${MINIO_BUCKET:-evolution-media}"
+      MINIO_USE_SSL: "false"
+      AMQP_GLOBAL_ENABLED: "false"
+      NATS_GLOBAL_ENABLED: "false"
+    volumes:
+      - evo_dbdata:/app/dbdata
+      - evo_logs:/app/logs
+    networks:
+      chatwoot-evo:
+        aliases:
+          - evolution-go
+      traefik-public: {}
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8080/server/ok || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: any
+        delay: 10s
+        max_attempts: 3
+      update_config:
+        parallelism: 1
+        delay: 20s
+        failure_action: rollback
+        order: stop-first
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+      labels:
+        - "traefik.enable=true"
+        - "traefik.docker.network=traefik-public"
+        - "traefik.http.routers.evolution.rule=Host(`${EVO_DOMAIN:-evo.ritodesk.com.br}`)"
+        - "traefik.http.routers.evolution.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
+        - "traefik.http.routers.evolution.tls=true"
+        - "traefik.http.routers.evolution.tls.certresolver=${TRAEFIK_CERTRESOLVER:-le}"
+        - "traefik.http.services.evolution.loadbalancer.server.port=8080"
+
+  evolution-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: "${EVO_DB_PASSWORD}"
+      POSTGRES_DB: postgres
+    volumes:
+      - evo_pgdata:/var/lib/postgresql/data
+    networks:
+      chatwoot-evo:
+        aliases:
+          - evolution-postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD}"
+    volumes:
+      - minio_data:/data
+    networks:
+      chatwoot-evo:
+        aliases:
+          - minio
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+  # One-shot: cria o bucket de mídia no MinIO. As credenciais vêm do ambiente e
+  # são lidas em runtime ($$ evita a interpolação do compose/Portainer).
+  minio-init:
+    image: minio/mc:latest
+    environment:
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD}"
+      MINIO_BUCKET: "${MINIO_BUCKET:-evolution-media}"
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        until mc alias set m http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do sleep 2; done && \
+        mc mb -p "m/$$MINIO_BUCKET" || true
+    networks:
+      - chatwoot-evo
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        max_attempts: 5
+      placement:
+        constraints:
+          - node.role == manager
+
+volumes:
+  evo_dbdata:
+  evo_logs:
+  evo_pgdata:
+  minio_data:
+
+networks:
+  chatwoot-evo:
+    external: true
+  traefik-public:
+    external: true
