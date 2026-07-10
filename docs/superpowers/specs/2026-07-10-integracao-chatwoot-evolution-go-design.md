@@ -135,6 +135,12 @@ Rede Docker externa compartilhada entre os dois stacks:
 - Confirmação de entrega (✓✓) via `PUT /messages/{id}` com status.
 - Fila persistente de reenvio quando o Chatwoot está indisponível.
 - Sincronização de nome/atributos do contato além da criação inicial.
+- **Garantia de ordem estritamente end-to-end.** O producer processa mensagens do mesmo contato em ordem (worker FIFO por JID), mas a camada de dispatch do evolution-go (`whatsmeow.go`) despacha cada evento numa goroutine própria (`go CallWebhook`), então há uma janela residual em que duas mensagens quase simultâneas do mesmo contato podem chegar ao producer fora de ordem. Improvável no uso humano (mensagens segundos à parte); fechar isso exigiria alterar o dispatch central compartilhado por todos os producers.
+
+## Notas de implementação (pós-revisão)
+
+- **Correlação resiliente a restart (implementado):** o cache conversa↔contato é em memória. Ao perder o cache (restart), o producer reconcilia com o Chatwoot como fonte da verdade: resolve o contato via `POST /contacts/filter` (phone_number equal_to) e a conversa aberta via `GET /contacts/{id}/conversations` (status `open`), só criando se não existir. Evita erro de telefone duplicado (422) e conversas duplicadas.
+- **`CHATWOOT_SELF_URL`:** a URL pública deste evolution-go (gravada no `webhook_url` de cada inbox) é configurável por env, com default `http://evolution-go:8080` (nome de serviço na rede compartilhada).
 
 ## Arquivos afetados (referência)
 
