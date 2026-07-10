@@ -75,7 +75,7 @@ func newTestLogger(t *testing.T) *logger_wrapper.LoggerManager {
 func TestCreateLink_ProvisionsInboxAndPersistsFields(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
-			"id": 42, "inbox_identifier": "abc", "channel": map[string]any{"secret": "sek"},
+			"id": 42, "inbox_identifier": "abc", "secret": "sek",
 		})
 	}))
 	defer srv.Close()
