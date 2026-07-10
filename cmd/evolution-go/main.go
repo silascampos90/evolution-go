@@ -201,7 +201,7 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 		chatwootConfigRepo,
 		instanceRepository,
 		instanceService,
-		"http://evolution-go:8080",
+		config.ChatwootSelfURL,
 		config.ClientName,
 		loggerWrapper,
 	)
