@@ -263,7 +263,21 @@ func (c *Client) DownloadFromChatwoot(rawURL string) ([]byte, string, error) {
 		u.Host = base.Host
 		return u
 	}
-	return c.download(rawURL, rewrite)
+	// O anexo pode ainda não estar disponível no storage no instante em que o
+	// webhook dispara (race do upload direto do ActiveStorage, comum em notas de
+	// voz). Tenta algumas vezes com backoff curto, dentro do timeout do webhook.
+	var lastErr error
+	for attempt := 0; attempt < 4; attempt++ {
+		if attempt > 0 {
+			time.Sleep(800 * time.Millisecond)
+		}
+		data, ct, err := c.download(rawURL, rewrite)
+		if err == nil {
+			return data, ct, nil
+		}
+		lastErr = err
+	}
+	return nil, "", lastErr
 }
 
 // download é o helper compartilhado por DownloadBytes e DownloadFromChatwoot.

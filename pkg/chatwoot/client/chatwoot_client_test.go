@@ -5,8 +5,35 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 )
+
+func TestDownloadFromChatwootRetriesUntilAvailable(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 404 nas 2 primeiras (blob ainda não disponível), 200 na 3ª.
+		if atomic.AddInt32(&calls, 1) < 3 {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "audio/ogg")
+		w.Write([]byte("OGG"))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "tok", "1")
+	data, ct, err := c.DownloadFromChatwoot(srv.URL + "/rails/x/audio.ogg")
+	if err != nil {
+		t.Fatalf("DownloadFromChatwoot: %v", err)
+	}
+	if string(data) != "OGG" || ct != "audio/ogg" {
+		t.Fatalf("bad download: %q %q", data, ct)
+	}
+	if atomic.LoadInt32(&calls) != 3 {
+		t.Fatalf("expected 3 attempts, got %d", calls)
+	}
+}
 
 func TestCreateInboxParsesResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
