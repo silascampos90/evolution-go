@@ -95,10 +95,10 @@ func (c *Client) CreateInbox(name, webhookURL string) (*Inbox, error) {
 // O Chatwoot deduplica por telefone; em caso de conflito, faz a busca por source_id.
 func (c *Client) FindOrCreateContact(name, phone, sourceID string, inboxID int) (*Contact, error) {
 	body := map[string]any{
-		"name":          name,
-		"phone_number":  phone,
-		"inbox_id":      inboxID,
-		"source_id":     sourceID,
+		"name":         name,
+		"phone_number": phone,
+		"inbox_id":     inboxID,
+		"source_id":    sourceID,
 	}
 	var raw struct {
 		Payload struct {
