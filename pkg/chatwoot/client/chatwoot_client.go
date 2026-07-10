@@ -78,17 +78,17 @@ func (c *Client) CreateInbox(name, webhookURL string) (*Inbox, error) {
 			"webhook_url": webhookURL,
 		},
 	}
+	// The inbox-create response returns id, inbox_identifier and secret at the top
+	// level (secret is NOT nested under a "channel" object).
 	var raw struct {
 		ID         int    `json:"id"`
 		Identifier string `json:"inbox_identifier"`
-		Channel    struct {
-			Secret string `json:"secret"`
-		} `json:"channel"`
+		Secret     string `json:"secret"`
 	}
 	if err := c.do(http.MethodPost, "/inboxes", body, &raw); err != nil {
 		return nil, err
 	}
-	return &Inbox{ID: raw.ID, Identifier: raw.Identifier, Secret: raw.Channel.Secret}, nil
+	return &Inbox{ID: raw.ID, Identifier: raw.Identifier, Secret: raw.Secret}, nil
 }
 
 // FindOrCreateContact cria um contato e o contact_inbox com source_id.

@@ -18,7 +18,7 @@ func TestCreateInboxParsesResponse(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"id":               42,
 			"inbox_identifier": "abc123",
-			"channel":          map[string]any{"secret": "s3cr3t"},
+			"secret":           "s3cr3t",
 		})
 	}))
 	defer srv.Close()
