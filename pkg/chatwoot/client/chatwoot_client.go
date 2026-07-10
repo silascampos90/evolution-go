@@ -141,6 +141,12 @@ func (c *Client) CreateIncomingMessage(conversationID int, content, sourceID str
 	return c.do(http.MethodPost, path, body, nil)
 }
 
+func (c *Client) UpdateMessageStatus(cid, mid int, status string) error {
+	body := map[string]any{"status": status}
+	path := fmt.Sprintf("/conversations/%d/messages/%d", cid, mid)
+	return c.do(http.MethodPut, path, body, nil)
+}
+
 // FindContactByPhone busca um contato existente pelo número de telefone.
 // Retorna (nil, nil) quando nenhum contato é encontrado — isso não é um erro.
 func (c *Client) FindContactByPhone(phone string) (*Contact, error) {

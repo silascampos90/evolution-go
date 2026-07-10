@@ -251,3 +251,25 @@ func TestDownloadBytesDoesNotRewriteHost(t *testing.T) {
 		t.Fatalf("bad download: %q", data)
 	}
 }
+
+func TestUpdateMessageStatus(t *testing.T) {
+	var gotPath, gotStatus, gotMethod string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		var body map[string]any
+		json.NewDecoder(r.Body).Decode(&body)
+		gotStatus, _ = body["status"].(string)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "tok", "1")
+	if err := c.UpdateMessageStatus(2, 11, "delivered"); err != nil {
+		t.Fatalf("UpdateMessageStatus: %v", err)
+	}
+	if gotMethod != http.MethodPut || gotPath != "/api/v1/accounts/1/conversations/2/messages/11" || gotStatus != "delivered" {
+		t.Fatalf("bad request: %s %s status=%s", gotMethod, gotPath, gotStatus)
+	}
+}
