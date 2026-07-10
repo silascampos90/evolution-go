@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	chatwoot_service "github.com/evolution-foundation/evolution-go/pkg/chatwoot/service"
+	chatwoot_ui "github.com/evolution-foundation/evolution-go/pkg/chatwoot/ui"
 	"github.com/gin-gonic/gin"
 )
 
@@ -13,6 +14,10 @@ type AdminHandler struct {
 
 func NewAdminHandler(service *chatwoot_service.ChatwootService) *AdminHandler {
 	return &AdminHandler{service: service}
+}
+
+func (h *AdminHandler) ServeUI(ctx *gin.Context) {
+	ctx.Data(http.StatusOK, "text/html; charset=utf-8", chatwoot_ui.IndexHTML)
 }
 
 func (h *AdminHandler) PutConfig(ctx *gin.Context) {
