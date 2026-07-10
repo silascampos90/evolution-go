@@ -137,3 +137,51 @@ func (c *Client) CreateIncomingMessage(conversationID int, content, sourceID str
 	path := fmt.Sprintf("/conversations/%d/messages", conversationID)
 	return c.do(http.MethodPost, path, body, nil)
 }
+
+// FindContactByPhone busca um contato existente pelo número de telefone.
+// Retorna (nil, nil) quando nenhum contato é encontrado — isso não é um erro.
+func (c *Client) FindContactByPhone(phone string) (*Contact, error) {
+	body := map[string]any{
+		"payload": []map[string]any{
+			{
+				"attribute_key":   "phone_number",
+				"filter_operator": "equal_to",
+				"values":          []string{phone},
+			},
+		},
+	}
+	var raw struct {
+		Payload []struct {
+			ID int `json:"id"`
+		} `json:"payload"`
+	}
+	if err := c.do(http.MethodPost, "/contacts/filter", body, &raw); err != nil {
+		return nil, err
+	}
+	if len(raw.Payload) == 0 {
+		return nil, nil
+	}
+	return &Contact{ID: raw.Payload[0].ID}, nil
+}
+
+// FindOpenConversation retorna o display_id da primeira conversa com status
+// "open" do contato, se houver. O display_id é o mesmo valor usado em
+// /conversations/{id}/messages, retornado por CreateConversation.
+func (c *Client) FindOpenConversation(contactID int) (int, bool, error) {
+	path := fmt.Sprintf("/contacts/%d/conversations", contactID)
+	var raw struct {
+		Payload []struct {
+			ID     int    `json:"id"`
+			Status string `json:"status"`
+		} `json:"payload"`
+	}
+	if err := c.do(http.MethodGet, path, nil, &raw); err != nil {
+		return 0, false, err
+	}
+	for _, conv := range raw.Payload {
+		if conv.Status == "open" {
+			return conv.ID, true, nil
+		}
+	}
+	return 0, false, nil
+}
