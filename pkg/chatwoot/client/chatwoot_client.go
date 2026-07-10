@@ -264,9 +264,20 @@ func (c *Client) DownloadFromChatwoot(rawURL string) ([]byte, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	orig, err := neturl.Parse(rawURL)
+	if err != nil {
+		return nil, "", err
+	}
+	// Reescreve para o host interno do Chatwoot APENAS os hosts que são do próprio
+	// Chatwoot (a data_url original, que usa o FRONTEND_URL, e o base_url). Um
+	// redirect para outro host — ex. URL presigned de S3/MinIO quando o Chatwoot usa
+	// object storage — passa intacto, senão a assinatura/host quebraria.
+	chatwootHosts := map[string]bool{orig.Host: true, base.Host: true}
 	rewrite := func(u *neturl.URL) *neturl.URL {
-		u.Scheme = base.Scheme
-		u.Host = base.Host
+		if chatwootHosts[u.Host] {
+			u.Scheme = base.Scheme
+			u.Host = base.Host
+		}
 		return u
 	}
 	// O anexo pode ainda não estar disponível no storage no instante em que o
