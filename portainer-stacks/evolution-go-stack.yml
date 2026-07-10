@@ -39,7 +39,6 @@ services:
       chatwoot-evo:
         aliases:
           - evolution-go
-      traefik-public: {}
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:8080/server/ok || exit 1"]
       interval: 30s
@@ -69,7 +68,7 @@ services:
           cpus: '0.1'
       labels:
         - "traefik.enable=true"
-        - "traefik.docker.network=traefik-public"
+        - "traefik.swarm.network=chatwoot-evo"
         - "traefik.http.routers.evolution.rule=Host(`${EVO_DOMAIN:-evo.ritodesk.com.br}`)"
         - "traefik.http.routers.evolution.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
         - "traefik.http.routers.evolution.tls=true"
@@ -106,7 +105,7 @@ services:
           cpus: '0.5'
 
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: "${MINIO_ROOT_USER}"
@@ -120,7 +119,6 @@ services:
       chatwoot-evo:
         aliases:
           - minio
-      traefik-public: {}
     healthcheck:
       test: ["CMD-SHELL", "mc ready local || exit 1"]
       interval: 30s
@@ -139,7 +137,7 @@ services:
           cpus: '0.5'
       labels:
         - "traefik.enable=true"
-        - "traefik.docker.network=traefik-public"
+        - "traefik.swarm.network=chatwoot-evo"
         - "traefik.http.routers.minio.rule=Host(`${MINIO_DOMAIN:-s3.ritodesk.com.br}`)"
         - "traefik.http.routers.minio.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}"
         - "traefik.http.routers.minio.tls=true"
@@ -180,6 +178,4 @@ volumes:
 
 networks:
   chatwoot-evo:
-    external: true
-  traefik-public:
     external: true

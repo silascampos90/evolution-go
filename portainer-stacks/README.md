@@ -8,13 +8,15 @@ Ingress via **Traefik** em `evo.ritodesk.com.br`. Sobe também um **Postgres** p
 
 ## Pré-requisitos (uma vez, no Swarm)
 
-Redes overlay externas compartilhadas:
+Rede overlay externa compartilhada + o Traefik precisa estar nela:
 
 ```bash
 docker network create --driver overlay --attachable chatwoot-evo
-# traefik-public: normalmente já existe (a rede do seu Traefik). Se não:
-docker network create --driver overlay --attachable traefik-public
 ```
+
+O **Traefik** roteia por `chatwoot-evo` (label `traefik.swarm.network=chatwoot-evo`),
+então adicione essa rede à lista `networks` do serviço do Traefik. O Traefik usa o
+provider Swarm (`--providers.swarm=true`), por isso os labels usam `traefik.swarm.*`.
 
 ## Variáveis de ambiente (definir no Portainer, na stack)
 
