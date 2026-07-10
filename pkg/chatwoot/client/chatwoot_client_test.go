@@ -178,7 +178,7 @@ func TestCreateIncomingAttachmentSendsMultipart(t *testing.T) {
 	}
 }
 
-func TestDownloadBytesRewritesHost(t *testing.T) {
+func TestDownloadFromChatwootRewritesHost(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/png")
 		w.Write([]byte("BYTES"))
@@ -187,11 +187,40 @@ func TestDownloadBytesRewritesHost(t *testing.T) {
 	// baseURL = srv; a URL de entrada usa outro host (localhost:9) que NÃO existe —
 	// prova que o host foi reescrito para o do srv.
 	c := NewClient(srv.URL, "tok", "1")
-	data, ct, err := c.DownloadBytes("http://localhost:9/rails/active_storage/x/file.png")
+	data, ct, err := c.DownloadFromChatwoot("http://localhost:9/rails/active_storage/x/file.png")
 	if err != nil {
-		t.Fatalf("DownloadBytes: %v", err)
+		t.Fatalf("DownloadFromChatwoot: %v", err)
 	}
 	if string(data) != "BYTES" || ct != "image/png" {
 		t.Fatalf("bad download: %q %q", data, ct)
+	}
+}
+
+func TestDownloadBytesDoesNotRewriteHost(t *testing.T) {
+	var hitB bool
+	srvA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("server A should not receive any request, got %s", r.URL.Path)
+	}))
+	defer srvA.Close()
+	srvB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hitB = true
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Write([]byte("MINIO-BYTES"))
+	}))
+	defer srvB.Close()
+
+	// baseURL = srvA; a URL baixada aponta para srvB e deve permanecer
+	// intocada (ex. presigned URL do MinIO, cuja assinatura quebraria se o
+	// host fosse reescrito para srvA).
+	c := NewClient(srvA.URL, "tok", "1")
+	data, _, err := c.DownloadBytes(srvB.URL + "/x")
+	if err != nil {
+		t.Fatalf("DownloadBytes: %v", err)
+	}
+	if !hitB {
+		t.Fatalf("expected server B to receive the request")
+	}
+	if string(data) != "MINIO-BYTES" {
+		t.Fatalf("bad download: %q", data)
 	}
 }

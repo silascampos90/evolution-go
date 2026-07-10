@@ -147,29 +147,49 @@ func (h *WebhookHandler) Handle(ctx *gin.Context) {
 		return
 	}
 	client := chatwoot_client.NewClient(cfg.BaseURL, cfg.APIToken, cfg.AccountID)
+	sentCount := 0
 	for i, att := range attachments {
-		fileBytes, ct, derr := client.DownloadBytes(att.DataURL)
+		fileBytes, _, derr := client.DownloadFromChatwoot(att.DataURL)
 		if derr != nil {
 			h.loggerWrapper.GetLogger(instance.Id).LogError("[%s] chatwoot->wa: falha ao baixar anexo: %v", instance.Id, derr)
 			continue
-		}
-		if ct == "" {
-			ct = att.ContentType
 		}
 		caption := ""
 		if i == 0 {
 			caption = text // legenda vai no primeiro anexo
 		}
-		filename := att.DataURL[strings.LastIndexByte(att.DataURL, '/')+1:]
 		media := &send_service.MediaStruct{
 			Number:   number,
 			Type:     fileTypeToMediaType(att.FileType),
 			Caption:  caption,
-			Filename: filename,
+			Filename: attachmentFilename(att),
 		}
 		if _, serr := h.sendService.SendMediaFile(media, fileBytes, instance); serr != nil {
 			h.loggerWrapper.GetLogger(instance.Id).LogError("[%s] chatwoot->wa: falha ao enviar mídia: %v", instance.Id, serr)
+			continue
 		}
+		sentCount++
+	}
+	if sentCount == 0 {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "todos os anexos falharam"})
+		return
 	}
 	ctx.JSON(http.StatusOK, gin.H{"status": "sent"})
+}
+
+// attachmentFilename deriva o nome do arquivo a partir do DataURL, removendo
+// qualquer query string (ex. "?disposition=attachment"). Se o resultado for
+// vazio, cai para "file.<extension>" ou apenas "file".
+func attachmentFilename(att outAttachment) string {
+	name := att.DataURL[strings.LastIndexByte(att.DataURL, '/')+1:]
+	if i := strings.IndexByte(name, '?'); i >= 0 {
+		name = name[:i]
+	}
+	if name != "" {
+		return name
+	}
+	if att.Extension != "" {
+		return "file." + att.Extension
+	}
+	return "file"
 }

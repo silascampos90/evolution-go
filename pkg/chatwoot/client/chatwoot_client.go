@@ -238,10 +238,22 @@ func (c *Client) CreateIncomingAttachment(conversationID int, content, sourceID 
 	return nil
 }
 
-// DownloadBytes baixa uma URL. Se a URL apontar para outro host (ex. FRONTEND_URL
-// do Chatwoot), reescreve o host para c.baseURL, e faz o mesmo em cada redirect,
-// mantendo a cadeia acessível na rede interna.
+// maxDownloadBytes limita o tamanho de um download de anexo/mídia.
+const maxDownloadBytes = 100 << 20 // 100 MiB
+
+// DownloadBytes baixa uma URL como está (sem reescrever host), seguindo
+// redirects normalmente. Use para URLs que já apontam para o host correto na
+// rede interna (ex. presigned URL do MinIO) — reescrever o host quebraria a
+// assinatura/servidor.
 func (c *Client) DownloadBytes(rawURL string) ([]byte, string, error) {
+	return c.download(rawURL, nil)
+}
+
+// DownloadFromChatwoot baixa uma URL do Chatwoot (ex. data_url de anexo, que
+// usa o host externo FRONTEND_URL). Reescreve o scheme+host da URL inicial e
+// de cada redirect para c.baseURL, mantendo a cadeia acessível na rede
+// interna.
+func (c *Client) DownloadFromChatwoot(rawURL string) ([]byte, string, error) {
 	base, err := neturl.Parse(c.baseURL)
 	if err != nil {
 		return nil, "", err
@@ -251,16 +263,26 @@ func (c *Client) DownloadBytes(rawURL string) ([]byte, string, error) {
 		u.Host = base.Host
 		return u
 	}
+	return c.download(rawURL, rewrite)
+}
+
+// download é o helper compartilhado por DownloadBytes e DownloadFromChatwoot.
+// Se rewrite for não-nil, é aplicado à URL inicial e a cada hop de redirect.
+func (c *Client) download(rawURL string, rewrite func(*neturl.URL) *neturl.URL) ([]byte, string, error) {
 	target, err := neturl.Parse(rawURL)
 	if err != nil {
 		return nil, "", err
 	}
-	target = rewrite(target)
+	if rewrite != nil {
+		target = rewrite(target)
+	}
 
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			rewrite(req.URL)
+			if rewrite != nil {
+				rewrite(req.URL)
+			}
 			if len(via) >= 10 {
 				return fmt.Errorf("too many redirects")
 			}
@@ -280,9 +302,12 @@ func (c *Client) DownloadBytes(rawURL string) ([]byte, string, error) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, "", fmt.Errorf("download %s -> %d", rawURL, resp.StatusCode)
 	}
-	data, err := io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadBytes+1))
 	if err != nil {
 		return nil, "", err
+	}
+	if len(data) > maxDownloadBytes {
+		return nil, "", fmt.Errorf("attachment exceeds 100MiB")
 	}
 	return data, resp.Header.Get("Content-Type"), nil
 }
