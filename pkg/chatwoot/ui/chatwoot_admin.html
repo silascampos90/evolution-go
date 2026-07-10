@@ -1,0 +1,491 @@
+<title>Integração Chatwoot</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f4f5f7;
+    --card-bg: #ffffff;
+    --border: #dcdfe4;
+    --text: #1f2328;
+    --muted: #6b7280;
+    --primary: #2563eb;
+    --primary-hover: #1d4ed8;
+    --green: #16a34a;
+    --yellow: #ca8a04;
+    --red: #dc2626;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  .container { max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 16px; }
+  h2 { font-size: 16px; margin: 0 0 12px; }
+  .topbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 20px;
+  }
+  .topbar label { font-size: 13px; color: var(--muted); }
+  .apikey-field { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 220px; }
+  input, button {
+    font-size: 14px;
+    font-family: inherit;
+  }
+  input[type="text"], input[type="password"] {
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--card-bg);
+    color: var(--text);
+    width: 100%;
+  }
+  button {
+    padding: 8px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--card-bg);
+    color: var(--text);
+    cursor: pointer;
+  }
+  button:hover { background: var(--bg); }
+  button.primary {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #fff;
+  }
+  button.primary:hover { background: var(--primary-hover); }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .panel {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 20px;
+    display: none;
+  }
+  .panel.open { display: block; }
+  .form-row { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+  .form-row label { font-size: 13px; color: var(--muted); }
+  .form-actions { display: flex; gap: 8px; align-items: center; }
+  .status-line { font-size: 13px; margin-left: 4px; }
+  .status-line.ok { color: var(--green); }
+  .status-line.error { color: var(--red); }
+  .hint {
+    margin-top: 12px;
+    padding: 12px;
+    border-radius: 6px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    font-size: 13px;
+    line-height: 1.5;
+    display: none;
+  }
+  .hint.open { display: block; }
+  .hint code {
+    background: rgba(0,0,0,0.06);
+    padding: 2px 5px;
+    border-radius: 4px;
+  }
+  .pairing-box {
+    margin-top: 12px;
+    padding: 16px;
+    border-radius: 6px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    text-align: center;
+    display: none;
+  }
+  .pairing-box.open { display: block; }
+  .qr-image {
+    display: none;
+    width: 220px;
+    height: 220px;
+    object-fit: contain;
+    background: #fff;
+    border-radius: 6px;
+    padding: 8px;
+  }
+  .qr-image.show { display: inline-block; }
+  .pairing-message {
+    font-size: 13px;
+    color: var(--muted);
+    margin-top: 10px;
+  }
+  .pairing-meta {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 10px;
+    line-height: 1.5;
+  }
+  .pairing-meta code {
+    background: rgba(0,0,0,0.06);
+    padding: 2px 5px;
+    border-radius: 4px;
+  }
+  .pairing-retry { margin-top: 12px; }
+  .cards-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+  }
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+  }
+  .card-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+  .dot { font-size: 12px; }
+  .card-number { color: var(--muted); font-size: 13px; margin-bottom: 8px; }
+  .card-link { font-size: 13px; }
+  .empty-state {
+    color: var(--muted);
+    font-size: 14px;
+    padding: 24px;
+    text-align: center;
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+  }
+</style>
+
+<div class="container">
+  <h1>Integração Chatwoot</h1>
+
+  <div class="topbar">
+    <div class="apikey-field">
+      <label for="apikey">apikey</label>
+      <input type="password" id="apikey" placeholder="Sua GLOBAL_API_KEY">
+    </div>
+    <div class="actions">
+      <button id="toggle-config">Config Chatwoot</button>
+      <button id="toggle-new-link">Nova conexão</button>
+      <button id="reload-links">Recarregar</button>
+    </div>
+  </div>
+
+  <div class="panel" id="config-panel">
+    <h2>Config Chatwoot</h2>
+    <div class="form-row">
+      <label for="cfg-base-url">Base URL</label>
+      <input type="text" id="cfg-base-url" placeholder="https://app.chatwoot.com">
+    </div>
+    <div class="form-row">
+      <label for="cfg-api-token">API Token</label>
+      <input type="password" id="cfg-api-token" placeholder="Token de acesso da API do Chatwoot">
+    </div>
+    <div class="form-row">
+      <label for="cfg-account-id">Account ID</label>
+      <input type="text" id="cfg-account-id" placeholder="1" value="1">
+    </div>
+    <div class="form-actions">
+      <button id="test-config">Testar</button>
+      <button class="primary" id="save-config">Salvar</button>
+      <span class="status-line" id="config-status"></span>
+    </div>
+  </div>
+
+  <div class="panel" id="new-link-panel">
+    <h2>Nova conexão</h2>
+    <div class="form-row">
+      <label for="link-name">Nome da instância</label>
+      <input type="text" id="link-name" placeholder="vendas">
+    </div>
+    <div class="form-actions">
+      <button class="primary" id="create-link">Criar e parear</button>
+      <span class="status-line" id="new-link-status"></span>
+    </div>
+    <div class="pairing-box" id="pairing-box">
+      <img class="qr-image" id="pairing-qr" alt="QR code de pareamento">
+      <div class="pairing-message" id="pairing-message"></div>
+      <div class="pairing-meta" id="pairing-meta"></div>
+      <button class="pairing-retry" id="pairing-retry" style="display: none;">Gerar novo QR</button>
+    </div>
+  </div>
+
+  <div class="cards-header">
+    <h2>Conexões</h2>
+    <span class="status-line" id="links-status"></span>
+  </div>
+  <div class="cards" id="cards"></div>
+</div>
+
+<script>
+  const API_KEY_STORAGE = 'evo_apikey';
+
+  const apikeyInput = document.getElementById('apikey');
+  apikeyInput.value = localStorage.getItem(API_KEY_STORAGE) || '';
+  apikeyInput.addEventListener('input', () => {
+    localStorage.setItem(API_KEY_STORAGE, apikeyInput.value);
+  });
+
+  function getApiKey() {
+    return apikeyInput.value.trim();
+  }
+
+  function setStatus(el, message, type) {
+    el.textContent = message || '';
+    el.classList.remove('ok', 'error');
+    if (type) el.classList.add(type);
+  }
+
+  async function apiFetch(path, options) {
+    options = options || {};
+    const headers = Object.assign({}, options.headers, { apikey: getApiKey() });
+    if (options.body) headers['Content-Type'] = 'application/json';
+    const res = await fetch(path, Object.assign({}, options, { headers }));
+    let data = null;
+    try {
+      data = await res.json();
+    } catch (e) {
+      data = null;
+    }
+    return { ok: res.ok, status: res.status, data };
+  }
+
+  // Panel toggles
+  function setupToggle(buttonId, panelId) {
+    const button = document.getElementById(buttonId);
+    const panel = document.getElementById(panelId);
+    button.addEventListener('click', () => {
+      panel.classList.toggle('open');
+    });
+  }
+  setupToggle('toggle-config', 'config-panel');
+  setupToggle('toggle-new-link', 'new-link-panel');
+
+  // Config: test
+  document.getElementById('test-config').addEventListener('click', async () => {
+    const statusEl = document.getElementById('config-status');
+    setStatus(statusEl, 'Testando...', null);
+    const { ok, data } = await apiFetch('/chatwoot/config/test', { method: 'POST' });
+    if (ok && data && data.ok) {
+      setStatus(statusEl, 'Conexão OK', 'ok');
+    } else {
+      setStatus(statusEl, 'Falhou: ' + ((data && data.error) || 'erro desconhecido'), 'error');
+    }
+  });
+
+  // Config: save
+  document.getElementById('save-config').addEventListener('click', async () => {
+    const statusEl = document.getElementById('config-status');
+    const body = {
+      baseUrl: document.getElementById('cfg-base-url').value.trim(),
+      apiToken: document.getElementById('cfg-api-token').value.trim(),
+      accountId: document.getElementById('cfg-account-id').value.trim(),
+    };
+    if (!body.baseUrl || !body.apiToken || !body.accountId) {
+      setStatus(statusEl, 'Preencha URL, API Token e Account ID', 'error');
+      return;
+    }
+    setStatus(statusEl, 'Salvando...', null);
+    const { ok, data } = await apiFetch('/chatwoot/config', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    });
+    if (ok) {
+      setStatus(statusEl, 'Configuração salva', 'ok');
+    } else {
+      setStatus(statusEl, 'Erro: ' + ((data && data.error) || 'erro desconhecido'), 'error');
+    }
+  });
+
+  // Pairing loop: QR rendering + status polling using the INSTANCE token (not the global apikey).
+  const QR_REFRESH_MS = 20000;
+  const STATUS_POLL_MS = 3000;
+  const PAIRING_TIMEOUT_MS = 120000;
+
+  let pairingTimers = { qr: null, status: null, timeout: null };
+  let pairingCtx = null;
+
+  async function instanceFetch(path, instanceToken) {
+    try {
+      const res = await fetch(path, { headers: { apikey: instanceToken } });
+      let data = null;
+      try {
+        data = await res.json();
+      } catch (e) {
+        data = null;
+      }
+      return { ok: res.ok, status: res.status, data };
+    } catch (e) {
+      return { ok: false, status: 0, data: null };
+    }
+  }
+
+  function stopPairingLoop() {
+    if (pairingTimers.qr) clearInterval(pairingTimers.qr);
+    if (pairingTimers.status) clearInterval(pairingTimers.status);
+    if (pairingTimers.timeout) clearTimeout(pairingTimers.timeout);
+    pairingTimers = { qr: null, status: null, timeout: null };
+  }
+
+  function setPairingMessage(text) {
+    document.getElementById('pairing-message').textContent = text || '';
+  }
+
+  async function refreshPairingQr(instanceToken) {
+    const img = document.getElementById('pairing-qr');
+    const { ok, data } = await instanceFetch('/instance/qr', instanceToken);
+    if (ok && data && data.data && data.data.qrcode) {
+      img.src = data.data.qrcode;
+      img.classList.add('show');
+      setPairingMessage('Escaneie o QR no WhatsApp para parear.');
+    } else {
+      img.classList.remove('show');
+      img.src = '';
+      setPairingMessage(ok ? 'Gerando QR…' : 'Aguardando instância iniciar…');
+    }
+  }
+
+  async function pollPairingStatus(instanceToken) {
+    const { ok, data } = await instanceFetch('/instance/status', instanceToken);
+    if (ok && data && data.data && (data.data.Connected || data.data.LoggedIn)) {
+      stopPairingLoop();
+      document.getElementById('pairing-qr').classList.remove('show');
+      document.getElementById('pairing-retry').style.display = 'none';
+      setPairingMessage('🟢 Conectado!');
+      loadLinks();
+      return;
+    }
+    if (!ok) {
+      setPairingMessage('Aguardando instância iniciar… tentando novamente.');
+    }
+  }
+
+  function startPairingLoop(instanceToken, instanceName, inboxId) {
+    stopPairingLoop();
+    pairingCtx = { instanceToken: instanceToken, instanceName: instanceName, inboxId: inboxId };
+
+    const box = document.getElementById('pairing-box');
+    const img = document.getElementById('pairing-qr');
+    const metaEl = document.getElementById('pairing-meta');
+    const retryBtn = document.getElementById('pairing-retry');
+
+    img.classList.remove('show');
+    img.src = '';
+    retryBtn.style.display = 'none';
+    metaEl.innerHTML =
+      'Instância: <code>' + escapeHtml(instanceName) + '</code><br>' +
+      'Token: <code>' + escapeHtml(instanceToken) + '</code><br>' +
+      'Inbox: <code>#' + escapeHtml(String(inboxId)) + '</code>';
+    box.classList.add('open');
+    setPairingMessage('Gerando QR…');
+
+    const runQr = () => refreshPairingQr(instanceToken);
+    const runStatus = () => pollPairingStatus(instanceToken);
+    runQr();
+    runStatus();
+    pairingTimers.qr = setInterval(runQr, QR_REFRESH_MS);
+    pairingTimers.status = setInterval(runStatus, STATUS_POLL_MS);
+    pairingTimers.timeout = setTimeout(() => {
+      stopPairingLoop();
+      img.classList.remove('show');
+      img.src = '';
+      setPairingMessage('QR expirou — clique para gerar de novo');
+      retryBtn.style.display = 'inline-block';
+    }, PAIRING_TIMEOUT_MS);
+  }
+
+  document.getElementById('pairing-retry').addEventListener('click', () => {
+    if (pairingCtx) {
+      startPairingLoop(pairingCtx.instanceToken, pairingCtx.instanceName, pairingCtx.inboxId);
+    }
+  });
+
+  // New link: create
+  document.getElementById('create-link').addEventListener('click', async () => {
+    const statusEl = document.getElementById('new-link-status');
+    const name = document.getElementById('link-name').value.trim();
+    if (!name) {
+      setStatus(statusEl, 'Informe um nome', 'error');
+      return;
+    }
+    stopPairingLoop();
+    document.getElementById('pairing-box').classList.remove('open');
+    setStatus(statusEl, 'Criando...', null);
+    const { ok, data } = await apiFetch('/chatwoot/links', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    });
+    if (ok && data && data.data) {
+      const { instanceToken, inboxId } = data.data;
+      setStatus(statusEl, 'Conexão criada', 'ok');
+      startPairingLoop(instanceToken, name, inboxId);
+      loadLinks();
+    } else {
+      setStatus(statusEl, 'Erro: ' + ((data && data.error) || 'erro desconhecido'), 'error');
+    }
+  });
+
+  // Links: load and render
+  function displayNumber(number) {
+    if (!number) return 'aguardando pareamento';
+    const at = number.indexOf('@');
+    return at === -1 ? number : number.slice(0, at);
+  }
+
+  function renderCards(links) {
+    const cardsEl = document.getElementById('cards');
+    cardsEl.innerHTML = '';
+    if (!links || links.length === 0) {
+      cardsEl.innerHTML = '<div class="empty-state">Nenhuma conexão ainda. Use "Nova conexão" para criar a primeira.</div>';
+      return;
+    }
+    links.forEach((link) => {
+      const card = document.createElement('div');
+      card.className = 'card';
+      const dot = link.connected ? '🟢' : '🟡';
+      card.innerHTML =
+        '<div class="card-title"><span class="dot">' + dot + '</span>' + escapeHtml(link.instanceName) + '</div>' +
+        '<div class="card-number">' + escapeHtml(displayNumber(link.number)) + '</div>' +
+        '<div class="card-link">📱 WhatsApp ──▶ 💬 #' + escapeHtml(String(link.inboxId)) + '</div>';
+      cardsEl.appendChild(card);
+    });
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  async function loadLinks() {
+    const statusEl = document.getElementById('links-status');
+    setStatus(statusEl, 'Carregando...', null);
+    const { ok, data } = await apiFetch('/chatwoot/links');
+    if (ok && data) {
+      renderCards(data.data || []);
+      setStatus(statusEl, '', null);
+    } else {
+      setStatus(statusEl, 'Erro: ' + ((data && data.error) || 'erro desconhecido'), 'error');
+    }
+  }
+
+  document.getElementById('reload-links').addEventListener('click', loadLinks);
+
+  loadLinks();
+</script>

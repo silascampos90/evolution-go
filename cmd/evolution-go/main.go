@@ -25,10 +25,16 @@ import (
 	call_service "github.com/evolution-foundation/evolution-go/pkg/call/service"
 	chat_handler "github.com/evolution-foundation/evolution-go/pkg/chat/handler"
 	chat_service "github.com/evolution-foundation/evolution-go/pkg/chat/service"
+	chatwoot_routes "github.com/evolution-foundation/evolution-go/pkg/chatwoot"
+	chatwoot_handler "github.com/evolution-foundation/evolution-go/pkg/chatwoot/handler"
+	chatwoot_model "github.com/evolution-foundation/evolution-go/pkg/chatwoot/model"
+	chatwoot_repository "github.com/evolution-foundation/evolution-go/pkg/chatwoot/repository"
+	chatwoot_service "github.com/evolution-foundation/evolution-go/pkg/chatwoot/service"
 	community_handler "github.com/evolution-foundation/evolution-go/pkg/community/handler"
 	community_service "github.com/evolution-foundation/evolution-go/pkg/community/service"
 	config "github.com/evolution-foundation/evolution-go/pkg/config"
 	"github.com/evolution-foundation/evolution-go/pkg/core"
+	chatwoot_producer "github.com/evolution-foundation/evolution-go/pkg/events/chatwoot"
 	producer_interfaces "github.com/evolution-foundation/evolution-go/pkg/events/interfaces"
 	nats_producer "github.com/evolution-foundation/evolution-go/pkg/events/nats"
 	rabbitmq_producer "github.com/evolution-foundation/evolution-go/pkg/events/rabbitmq"
@@ -159,6 +165,9 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 	}
 
 	instanceRepository := instance_repository.NewInstanceRepository(db)
+	chatwootConfigRepo := chatwoot_repository.NewChatwootConfigRepository(db)
+	chatwootMessageMapRepo := chatwoot_repository.NewMessageMapRepository(db)
+	chatwootProducer := chatwoot_producer.NewChatwootProducer(chatwootConfigRepo, instanceRepository, chatwootMessageMapRepo, loggerWrapper)
 	messageRepository := message_repository.NewMessageRepository(db)
 	labelRepository := label_repository.NewLabelRepository(db)
 
@@ -177,6 +186,7 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 		exPath,
 		mediaStorage,
 		natsProducer,
+		chatwootProducer,
 		loggerWrapper,
 	)
 	instanceService := instance_service.NewInstanceService(
@@ -188,6 +198,16 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 		loggerWrapper,
 	)
 	sendMessageService := send_service.NewSendService(clientPointer, whatsmeowService, config, loggerWrapper)
+	chatwootSvc := chatwoot_service.NewChatwootService(
+		chatwootConfigRepo,
+		instanceRepository,
+		instanceService,
+		config.ChatwootSelfURL,
+		config.ClientName,
+		loggerWrapper,
+	)
+	chatwootAdmin := chatwoot_handler.NewAdminHandler(chatwootSvc)
+	chatwootWebhook := chatwoot_handler.NewWebhookHandler(instanceRepository, sendMessageService, chatwootConfigRepo, chatwootMessageMapRepo, loggerWrapper)
 	userService := user_service.NewUserService(clientPointer, whatsmeowService, loggerWrapper)
 	messageService := message_service.NewMessageService(clientPointer, messageRepository, whatsmeowService, loggerWrapper)
 	chatService := chat_service.NewChatService(clientPointer, whatsmeowService, loggerWrapper)
@@ -241,6 +261,8 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 		server_handler.NewServerHandler(),
 	).AssignRoutes(r)
 
+	chatwoot_routes.Register(r, chatwootAdmin, chatwootWebhook, auth_middleware.NewMiddleware(config, instanceService).AuthAdmin)
+
 	if config.ConnectOnStartup {
 		go whatsmeowService.ConnectOnStartup(config.ClientName)
 	}
@@ -262,7 +284,7 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 }
 
 func migrate(db *gorm.DB) {
-	err := db.AutoMigrate(&instance_model.Instance{}, &message_model.Message{}, &label_model.Label{})
+	err := db.AutoMigrate(&instance_model.Instance{}, &message_model.Message{}, &label_model.Label{}, &chatwoot_model.ChatwootConfig{}, &chatwoot_model.MessageMap{})
 
 	if err != nil {
 		log.Fatal(err)

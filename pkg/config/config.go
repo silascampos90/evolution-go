@@ -61,6 +61,7 @@ type Config struct {
 	EventIgnoreStatus    bool
 	QrcodeMaxCount       int
 	CheckUserExists      bool
+	ChatwootSelfURL      string
 
 	// Logger configurations
 	LogMaxSize    int
@@ -280,6 +281,11 @@ func Load() *Config {
 		checkUserExists = "true"
 	}
 
+	chatwootSelfURL := os.Getenv(config_env.CHATWOOT_SELF_URL)
+	if chatwootSelfURL == "" {
+		chatwootSelfURL = "http://evolution-go:8080"
+	}
+
 	// Convertendo para int com valores padrão caso estejam vazios
 	major := 0
 	if whatsappVersionMajor != "" {
@@ -375,6 +381,7 @@ func Load() *Config {
 		EventIgnoreStatus:    eventIgnoreStatus == "true",
 		QrcodeMaxCount:       qrMaxCount,
 		CheckUserExists:      checkUserExists != "false", // Default true, set to false to disable
+		ChatwootSelfURL:      chatwootSelfURL,
 		AmqpGlobalEvents:     amqpGlobalEvents,
 		AmqpSpecificEvents:   amqpSpecificEvents,
 		NatsUrl:              natsUrl,

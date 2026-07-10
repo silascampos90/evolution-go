@@ -26,6 +26,12 @@ type Instance struct {
 	ClientName       string    `json:"client_name"`
 	CreatedAt        time.Time `json:"createdAt" gorm:"autoCreateTime"`
 
+	// Chatwoot integration
+	ChatwootEnabled         bool   `json:"chatwootEnabled" gorm:"default:false"`
+	ChatwootInboxID         string `json:"chatwootInboxId" gorm:"default:''"`
+	ChatwootInboxIdentifier string `json:"chatwootInboxIdentifier" gorm:"default:''"`
+	ChatwootWebhookSecret   string `json:"chatwootWebhookSecret" gorm:"default:''"`
+
 	// Advanced Settings
 	AlwaysOnline  bool   `json:"alwaysOnline" gorm:"default:false"`
 	RejectCall    bool   `json:"rejectCall" gorm:"default:false"`

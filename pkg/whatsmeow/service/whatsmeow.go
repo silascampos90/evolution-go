@@ -95,6 +95,7 @@ type whatsmeowService struct {
 	mediaStorage       storage_interfaces.MediaStorage
 	processedMessages  *cache.Cache
 	natsProducer       producer_interfaces.Producer
+	chatwootProducer   producer_interfaces.Producer
 	loggerWrapper      *logger_wrapper.LoggerManager
 	passkeyCeremony    *ceremony.Store
 }
@@ -2318,6 +2319,14 @@ func (w *whatsmeowService) sendToQueueOrWebhook(instance *instance_model.Instanc
 		}
 		w.loggerWrapper.GetLogger(instance.Id).LogInfo("[%s] Message sent to webhook successfully", instance.Id)
 	}
+
+	if instance.ChatwootEnabled {
+		err := w.chatwootProducer.Produce(queueName, jsonData, "", instance.Id)
+		if err != nil {
+			w.loggerWrapper.GetLogger(instance.Id).LogError("[%s] Failed to send message to chatwoot: %s", instance.Id, err)
+			return
+		}
+	}
 }
 
 func (w whatsmeowService) StartInstance(instanceId string) error {
@@ -2805,6 +2814,7 @@ func NewWhatsmeowService(
 	exPath string,
 	mediaStorage storage_interfaces.MediaStorage,
 	natsProducer producer_interfaces.Producer,
+	chatwootProducer producer_interfaces.Producer,
 	loggerWrapper *logger_wrapper.LoggerManager,
 ) WhatsmeowService {
 	// Inicializar PollService de forma segura
@@ -2829,6 +2839,7 @@ func NewWhatsmeowService(
 		mediaStorage:       mediaStorage,
 		processedMessages:  cache.New(30*time.Minute, 1*time.Hour),
 		natsProducer:       natsProducer,
+		chatwootProducer:   chatwootProducer,
 		loggerWrapper:      loggerWrapper,
 		passkeyCeremony:    ceremony.NewStore(),
 	}
