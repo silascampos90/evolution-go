@@ -1,6 +1,7 @@
 package chatwoot_producer
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"sync"
@@ -18,11 +19,22 @@ type incomingMsg struct {
 	Text       string
 	Wamid      string
 	InstanceID string
+	Media      *mediaInfo
 }
 
-// parseIncomingText extrai uma mensagem de texto 1:1 recebida do envelope de evento.
-// Retorna ok=false quando o evento deve ser ignorado.
-func parseIncomingText(payload []byte) (*incomingMsg, bool) {
+type mediaInfo struct {
+	Base64   string
+	MediaURL string
+	Mimetype string
+	Filename string
+	IsVoice  bool
+}
+
+// parseIncoming extrai texto e/ou mídia 1:1 do envelope de evento. Puro (sem IO):
+// não decodifica base64 nem baixa mediaUrl. Retorna ok=false quando o evento
+// deve ser ignorado (FromMe, grupo, broadcast, evento não-Message, ou mídia
+// sem bytes disponíveis).
+func parseIncoming(payload []byte) (*incomingMsg, bool) {
 	var env struct {
 		Event      string `json:"event"`
 		InstanceID string `json:"instanceId"`
@@ -34,12 +46,7 @@ func parseIncomingText(payload []byte) (*incomingMsg, bool) {
 				ID       string `json:"ID"`
 				IsFromMe bool   `json:"IsFromMe"`
 			} `json:"Info"`
-			Message struct {
-				Conversation    string `json:"conversation"`
-				ExtendedTextMsg struct {
-					Text string `json:"text"`
-				} `json:"extendedTextMessage"`
-			} `json:"Message"`
+			Message json.RawMessage `json:"Message"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(payload, &env); err != nil {
@@ -52,20 +59,92 @@ func parseIncomingText(payload []byte) (*incomingMsg, bool) {
 	if strings.HasSuffix(chat, "@g.us") || strings.Contains(chat, "status@broadcast") {
 		return nil, false
 	}
-	text := env.Data.Message.Conversation
+
+	var msgMap map[string]json.RawMessage
+	_ = json.Unmarshal(env.Data.Message, &msgMap)
+
+	base := &incomingMsg{
+		JID:        env.Data.Info.Sender,
+		PushName:   env.Data.Info.PushName,
+		Wamid:      env.Data.Info.ID,
+		InstanceID: env.InstanceID,
+	}
+
+	// Campos irmãos adicionados pelo evolution ao nível de Message.
+	var top struct {
+		Base64          string `json:"base64"`
+		MediaURL        string `json:"mediaUrl"`
+		Mimetype        string `json:"mimetype"`
+		Conversation    string `json:"conversation"`
+		ExtendedTextMsg struct {
+			Text string `json:"text"`
+		} `json:"extendedTextMessage"`
+	}
+	_ = json.Unmarshal(env.Data.Message, &top)
+
+	// Detecta mídia pela sub-chave presente.
+	type mediaKind struct {
+		key     string
+		mime    string
+		ext     string
+		isVoice bool
+	}
+	kinds := []mediaKind{
+		{"imageMessage", "image/jpeg", "jpg", false},
+		{"videoMessage", "video/mp4", "mp4", false},
+		{"audioMessage", "audio/ogg", "ogg", true},
+		{"documentMessage", "application/octet-stream", "bin", false},
+		{"stickerMessage", "image/png", "png", false},
+	}
+	for _, k := range kinds {
+		sub, ok := msgMap[k.key]
+		if !ok {
+			continue
+		}
+		// caption e (para doc) filename/mimetype ficam dentro do sub-objeto.
+		var subFields struct {
+			Caption  string `json:"caption"`
+			FileName string `json:"fileName"`
+			Mimetype string `json:"mimetype"`
+		}
+		_ = json.Unmarshal(sub, &subFields)
+
+		mime := top.Mimetype
+		if mime == "" {
+			mime = subFields.Mimetype
+		}
+		if mime == "" {
+			mime = k.mime
+		}
+		filename := subFields.FileName
+		if filename == "" {
+			filename = env.Data.Info.ID + "." + k.ext
+		}
+		base.Text = subFields.Caption
+		base.Media = &mediaInfo{
+			Base64:   top.Base64,
+			MediaURL: top.MediaURL,
+			Mimetype: mime,
+			Filename: filename,
+			IsVoice:  k.isVoice,
+		}
+		// Sem bytes disponíveis (nem base64 nem mediaUrl) → não dá para injetar.
+		if base.Media.Base64 == "" && base.Media.MediaURL == "" {
+			return nil, false
+		}
+		return base, true
+	}
+
+	// Sem mídia: texto puro.
+	text := top.Conversation
 	if text == "" {
-		text = env.Data.Message.ExtendedTextMsg.Text
+		text = top.ExtendedTextMsg.Text
 	}
 	if text == "" {
 		return nil, false
 	}
-	return &incomingMsg{
-		JID:        env.Data.Info.Sender,
-		PushName:   env.Data.Info.PushName,
-		Text:       text,
-		Wamid:      env.Data.Info.ID,
-		InstanceID: env.InstanceID,
-	}, true
+	base.Text = text
+	return base, true
 }
 
 type chatwootProducer struct {
@@ -106,7 +185,7 @@ func (p *chatwootProducer) CreateGlobalQueues() error { return nil }
 // Produce recebe o envelope de evento e o enfileira no worker responsavel
 // pelo JID de origem, preservando a ordem de chegada por conversa.
 func (p *chatwootProducer) Produce(queueName string, payload []byte, _ string, userID string) error {
-	msg, ok := parseIncomingText(payload)
+	msg, ok := parseIncoming(payload)
 	if !ok {
 		return nil
 	}
@@ -141,7 +220,7 @@ func (p *chatwootProducer) workerFor(cacheKey, userID string) chan []byte {
 func (p *chatwootProducer) handle(payload []byte, userID string) {
 	log := p.loggerWrapper.GetLogger(userID)
 
-	msg, ok := parseIncomingText(payload)
+	msg, ok := parseIncoming(payload)
 	if !ok {
 		return
 	}
@@ -163,9 +242,7 @@ func (p *chatwootProducer) handle(payload []byte, userID string) {
 	cacheKey := msg.InstanceID + "|" + msg.JID
 	if v, ok := p.convCache.Load(cacheKey); ok {
 		entry := v.(convCacheEntry)
-		if err := client.CreateIncomingMessage(entry.ConversationID, msg.Text, msg.Wamid); err != nil {
-			log.LogError("[%s] chatwoot: falha ao injetar mensagem: %v", userID, err)
-		}
+		p.inject(client, entry.ConversationID, msg, log, userID)
 		return
 	}
 
@@ -202,9 +279,34 @@ func (p *chatwootProducer) handle(payload []byte, userID string) {
 	}
 	p.convCache.Store(cacheKey, convCacheEntry{ContactID: contact.ID, ConversationID: convID})
 
-	if err := client.CreateIncomingMessage(convID, msg.Text, msg.Wamid); err != nil {
-		log.LogError("[%s] chatwoot: falha ao injetar mensagem: %v", userID, err)
+	p.inject(client, convID, msg, log, userID)
+}
+
+// inject envia a mensagem (texto puro ou anexo de mídia) para o Chatwoot.
+func (p *chatwootProducer) inject(client *chatwoot_client.Client, convID int, msg *incomingMsg, log *logger_wrapper.Logger, userID string) {
+	if msg.Media == nil {
+		if err := client.CreateIncomingMessage(convID, msg.Text, msg.Wamid); err != nil {
+			log.LogError("[%s] chatwoot: falha ao injetar mensagem: %v", userID, err)
+		}
+		return
 	}
+	fileBytes, err := resolveMediaBytes(client, msg.Media)
+	if err != nil {
+		log.LogError("[%s] chatwoot: falha ao obter bytes da mídia: %v", userID, err)
+		return
+	}
+	if err := client.CreateIncomingAttachment(convID, msg.Text, msg.Wamid, fileBytes, msg.Media.Filename, msg.Media.Mimetype, msg.Media.IsVoice); err != nil {
+		log.LogError("[%s] chatwoot: falha ao injetar anexo: %v", userID, err)
+	}
+}
+
+// resolveMediaBytes decodifica o base64 ou baixa da mediaUrl (o que existir).
+func resolveMediaBytes(client *chatwoot_client.Client, m *mediaInfo) ([]byte, error) {
+	if m.Base64 != "" {
+		return base64.StdEncoding.DecodeString(m.Base64)
+	}
+	data, _, err := client.DownloadBytes(m.MediaURL)
+	return data, err
 }
 
 func phoneFromJID(jid string) string {
