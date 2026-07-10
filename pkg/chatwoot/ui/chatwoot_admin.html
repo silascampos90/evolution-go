@@ -199,7 +199,7 @@
     </div>
     <div class="form-row">
       <label for="cfg-account-id">Account ID</label>
-      <input type="text" id="cfg-account-id" placeholder="1">
+      <input type="text" id="cfg-account-id" placeholder="1" value="1">
     </div>
     <div class="form-actions">
       <button id="test-config">Testar</button>
@@ -297,6 +297,10 @@
       apiToken: document.getElementById('cfg-api-token').value.trim(),
       accountId: document.getElementById('cfg-account-id').value.trim(),
     };
+    if (!body.baseUrl || !body.apiToken || !body.accountId) {
+      setStatus(statusEl, 'Preencha URL, API Token e Account ID', 'error');
+      return;
+    }
     setStatus(statusEl, 'Salvando...', null);
     const { ok, data } = await apiFetch('/chatwoot/config', {
       method: 'PUT',

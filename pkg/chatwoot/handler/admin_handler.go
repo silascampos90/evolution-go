@@ -30,6 +30,10 @@ func (h *AdminHandler) PutConfig(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if body.BaseURL == "" || body.APIToken == "" || body.AccountID == "" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "baseUrl, apiToken e accountId são obrigatórios"})
+		return
+	}
 	if err := h.service.SaveConfig(body.BaseURL, body.APIToken, body.AccountID); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
