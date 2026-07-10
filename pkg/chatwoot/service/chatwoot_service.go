@@ -10,6 +10,7 @@ import (
 	chatwoot_repository "github.com/evolution-foundation/evolution-go/pkg/chatwoot/repository"
 	instance_model "github.com/evolution-foundation/evolution-go/pkg/instance/model"
 	instance_service "github.com/evolution-foundation/evolution-go/pkg/instance/service"
+	event_types "github.com/evolution-foundation/evolution-go/pkg/internal/event_types"
 	logger_wrapper "github.com/evolution-foundation/evolution-go/pkg/logger"
 )
 
@@ -126,6 +127,7 @@ func (s *ChatwootService) CreateLink(name string) (*CreateLinkResult, error) {
 	created.ChatwootInboxID = fmt.Sprintf("%d", inbox.ID)
 	created.ChatwootInboxIdentifier = inbox.Identifier
 	created.ChatwootWebhookSecret = inbox.Secret
+	created.Events = event_types.MESSAGE
 	if err := s.instanceRepo.Update(created); err != nil {
 		return nil, fmt.Errorf("persistir vínculo: %w", err)
 	}

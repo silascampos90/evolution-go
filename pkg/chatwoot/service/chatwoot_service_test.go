@@ -11,6 +11,7 @@ import (
 	"github.com/evolution-foundation/evolution-go/pkg/config"
 	instance_model "github.com/evolution-foundation/evolution-go/pkg/instance/model"
 	instance_service "github.com/evolution-foundation/evolution-go/pkg/instance/service"
+	event_types "github.com/evolution-foundation/evolution-go/pkg/internal/event_types"
 	logger_wrapper "github.com/evolution-foundation/evolution-go/pkg/logger"
 )
 
@@ -94,6 +95,9 @@ func TestCreateLink_ProvisionsInboxAndPersistsFields(t *testing.T) {
 	saved := instRepo.updated
 	if saved == nil || !saved.ChatwootEnabled || saved.ChatwootInboxID != "42" || saved.ChatwootWebhookSecret != "sek" {
 		t.Fatalf("instance fields not persisted: %+v", saved)
+	}
+	if saved.Events != event_types.MESSAGE {
+		t.Fatalf("expected instance to be subscribed to MESSAGE events, got Events=%q", saved.Events)
 	}
 }
 
