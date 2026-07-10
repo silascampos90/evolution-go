@@ -98,6 +98,43 @@
     padding: 2px 5px;
     border-radius: 4px;
   }
+  .pairing-box {
+    margin-top: 12px;
+    padding: 16px;
+    border-radius: 6px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    text-align: center;
+    display: none;
+  }
+  .pairing-box.open { display: block; }
+  .qr-image {
+    display: none;
+    width: 220px;
+    height: 220px;
+    object-fit: contain;
+    background: #fff;
+    border-radius: 6px;
+    padding: 8px;
+  }
+  .qr-image.show { display: inline-block; }
+  .pairing-message {
+    font-size: 13px;
+    color: var(--muted);
+    margin-top: 10px;
+  }
+  .pairing-meta {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 10px;
+    line-height: 1.5;
+  }
+  .pairing-meta code {
+    background: rgba(0,0,0,0.06);
+    padding: 2px 5px;
+    border-radius: 4px;
+  }
+  .pairing-retry { margin-top: 12px; }
   .cards-header {
     display: flex;
     justify-content: space-between;
@@ -181,7 +218,12 @@
       <button class="primary" id="create-link">Criar e parear</button>
       <span class="status-line" id="new-link-status"></span>
     </div>
-    <div class="hint" id="new-link-hint"></div>
+    <div class="pairing-box" id="pairing-box">
+      <img class="qr-image" id="pairing-qr" alt="QR code de pareamento">
+      <div class="pairing-message" id="pairing-message"></div>
+      <div class="pairing-meta" id="pairing-meta"></div>
+      <button class="pairing-retry" id="pairing-retry" style="display: none;">Gerar novo QR</button>
+    </div>
   </div>
 
   <div class="cards-header">
@@ -267,17 +309,120 @@
     }
   });
 
+  // Pairing loop: QR rendering + status polling using the INSTANCE token (not the global apikey).
+  const QR_REFRESH_MS = 20000;
+  const STATUS_POLL_MS = 3000;
+  const PAIRING_TIMEOUT_MS = 120000;
+
+  let pairingTimers = { qr: null, status: null, timeout: null };
+  let pairingCtx = null;
+
+  async function instanceFetch(path, instanceToken) {
+    try {
+      const res = await fetch(path, { headers: { apikey: instanceToken } });
+      let data = null;
+      try {
+        data = await res.json();
+      } catch (e) {
+        data = null;
+      }
+      return { ok: res.ok, status: res.status, data };
+    } catch (e) {
+      return { ok: false, status: 0, data: null };
+    }
+  }
+
+  function stopPairingLoop() {
+    if (pairingTimers.qr) clearInterval(pairingTimers.qr);
+    if (pairingTimers.status) clearInterval(pairingTimers.status);
+    if (pairingTimers.timeout) clearTimeout(pairingTimers.timeout);
+    pairingTimers = { qr: null, status: null, timeout: null };
+  }
+
+  function setPairingMessage(text) {
+    document.getElementById('pairing-message').textContent = text || '';
+  }
+
+  async function refreshPairingQr(instanceToken) {
+    const img = document.getElementById('pairing-qr');
+    const { ok, data } = await instanceFetch('/instance/qr', instanceToken);
+    if (ok && data && data.data && data.data.qrcode) {
+      img.src = data.data.qrcode;
+      img.classList.add('show');
+      setPairingMessage('Escaneie o QR no WhatsApp para parear.');
+    } else {
+      img.classList.remove('show');
+      img.src = '';
+      setPairingMessage(ok ? 'Gerando QR…' : 'Aguardando instância iniciar…');
+    }
+  }
+
+  async function pollPairingStatus(instanceToken) {
+    const { ok, data } = await instanceFetch('/instance/status', instanceToken);
+    if (ok && data && data.data && (data.data.Connected || data.data.LoggedIn)) {
+      stopPairingLoop();
+      document.getElementById('pairing-qr').classList.remove('show');
+      document.getElementById('pairing-retry').style.display = 'none';
+      setPairingMessage('🟢 Conectado!');
+      loadLinks();
+      return;
+    }
+    if (!ok) {
+      setPairingMessage('Aguardando instância iniciar… tentando novamente.');
+    }
+  }
+
+  function startPairingLoop(instanceToken, instanceName, inboxId) {
+    stopPairingLoop();
+    pairingCtx = { instanceToken: instanceToken, instanceName: instanceName, inboxId: inboxId };
+
+    const box = document.getElementById('pairing-box');
+    const img = document.getElementById('pairing-qr');
+    const metaEl = document.getElementById('pairing-meta');
+    const retryBtn = document.getElementById('pairing-retry');
+
+    img.classList.remove('show');
+    img.src = '';
+    retryBtn.style.display = 'none';
+    metaEl.innerHTML =
+      'Instância: <code>' + escapeHtml(instanceName) + '</code><br>' +
+      'Token: <code>' + escapeHtml(instanceToken) + '</code><br>' +
+      'Inbox: <code>#' + escapeHtml(String(inboxId)) + '</code>';
+    box.classList.add('open');
+    setPairingMessage('Gerando QR…');
+
+    const runQr = () => refreshPairingQr(instanceToken);
+    const runStatus = () => pollPairingStatus(instanceToken);
+    runQr();
+    runStatus();
+    pairingTimers.qr = setInterval(runQr, QR_REFRESH_MS);
+    pairingTimers.status = setInterval(runStatus, STATUS_POLL_MS);
+    pairingTimers.timeout = setTimeout(() => {
+      stopPairingLoop();
+      img.classList.remove('show');
+      img.src = '';
+      setPairingMessage('QR expirou — clique para gerar de novo');
+      retryBtn.style.display = 'inline-block';
+    }, PAIRING_TIMEOUT_MS);
+  }
+
+  document.getElementById('pairing-retry').addEventListener('click', () => {
+    if (pairingCtx) {
+      startPairingLoop(pairingCtx.instanceToken, pairingCtx.instanceName, pairingCtx.inboxId);
+    }
+  });
+
   // New link: create
   document.getElementById('create-link').addEventListener('click', async () => {
     const statusEl = document.getElementById('new-link-status');
-    const hintEl = document.getElementById('new-link-hint');
     const name = document.getElementById('link-name').value.trim();
     if (!name) {
       setStatus(statusEl, 'Informe um nome', 'error');
       return;
     }
+    stopPairingLoop();
+    document.getElementById('pairing-box').classList.remove('open');
     setStatus(statusEl, 'Criando...', null);
-    hintEl.classList.remove('open');
     const { ok, data } = await apiFetch('/chatwoot/links', {
       method: 'POST',
       body: JSON.stringify({ name }),
@@ -285,11 +430,7 @@
     if (ok && data && data.data) {
       const { instanceToken, inboxId } = data.data;
       setStatus(statusEl, 'Conexão criada', 'ok');
-      hintEl.innerHTML =
-        'Token da instância: <code>' + instanceToken + '</code><br>' +
-        'Inbox: <code>#' + inboxId + '</code><br>' +
-        'Para parear, obtenha o QR em <code>GET /instance/qr</code> usando este token como header <code>apikey</code>.';
-      hintEl.classList.add('open');
+      startPairingLoop(instanceToken, name, inboxId);
       loadLinks();
     } else {
       setStatus(statusEl, 'Erro: ' + ((data && data.error) || 'erro desconhecido'), 'error');
