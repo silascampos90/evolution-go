@@ -25,8 +25,11 @@ import (
 	call_service "github.com/evolution-foundation/evolution-go/pkg/call/service"
 	chat_handler "github.com/evolution-foundation/evolution-go/pkg/chat/handler"
 	chat_service "github.com/evolution-foundation/evolution-go/pkg/chat/service"
+	chatwoot_routes "github.com/evolution-foundation/evolution-go/pkg/chatwoot"
+	chatwoot_handler "github.com/evolution-foundation/evolution-go/pkg/chatwoot/handler"
 	chatwoot_model "github.com/evolution-foundation/evolution-go/pkg/chatwoot/model"
 	chatwoot_repository "github.com/evolution-foundation/evolution-go/pkg/chatwoot/repository"
+	chatwoot_service "github.com/evolution-foundation/evolution-go/pkg/chatwoot/service"
 	community_handler "github.com/evolution-foundation/evolution-go/pkg/community/handler"
 	community_service "github.com/evolution-foundation/evolution-go/pkg/community/service"
 	config "github.com/evolution-foundation/evolution-go/pkg/config"
@@ -194,6 +197,16 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 		loggerWrapper,
 	)
 	sendMessageService := send_service.NewSendService(clientPointer, whatsmeowService, config, loggerWrapper)
+	chatwootSvc := chatwoot_service.NewChatwootService(
+		chatwootConfigRepo,
+		instanceRepository,
+		instanceService,
+		"http://evolution-go:8080",
+		config.ClientName,
+		loggerWrapper,
+	)
+	chatwootAdmin := chatwoot_handler.NewAdminHandler(chatwootSvc)
+	chatwootWebhook := chatwoot_handler.NewWebhookHandler(instanceRepository, sendMessageService, loggerWrapper)
 	userService := user_service.NewUserService(clientPointer, whatsmeowService, loggerWrapper)
 	messageService := message_service.NewMessageService(clientPointer, messageRepository, whatsmeowService, loggerWrapper)
 	chatService := chat_service.NewChatService(clientPointer, whatsmeowService, loggerWrapper)
@@ -246,6 +259,8 @@ func setupRouter(db *gorm.DB, authDB *sql.DB, sqliteDB *sql.DB, config *config.C
 		pollHandler,
 		server_handler.NewServerHandler(),
 	).AssignRoutes(r)
+
+	chatwoot_routes.Register(r, chatwootAdmin, chatwootWebhook, auth_middleware.NewMiddleware(config, instanceService).AuthAdmin)
 
 	if config.ConnectOnStartup {
 		go whatsmeowService.ConnectOnStartup(config.ClientName)

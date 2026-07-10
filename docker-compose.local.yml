@@ -1,0 +1,49 @@
+# Ambiente local do fork evolution-go (build com o patch de ativação offline).
+# Sobe a API + um Postgres próprio com os bancos evogo_auth e evogo_users.
+services:
+  evolution-go:
+    image: evolution-go:local
+    build:
+      context: .
+    container_name: evolution-go
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - '8080:8080'
+    volumes:
+      - evo_dbdata:/app/dbdata
+      - evo_logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - default
+      - chatwoot-evo
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: evolution-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: evolution
+      POSTGRES_DB: postgres
+    ports:
+      - '5432:5432'
+    volumes:
+      - evo_pg:/var/lib/postgresql/data
+      - ./docker/examples/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  evo_dbdata:
+  evo_logs:
+  evo_pg:
+
+networks:
+  chatwoot-evo:
+    external: true
