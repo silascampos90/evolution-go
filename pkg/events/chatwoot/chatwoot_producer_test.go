@@ -90,3 +90,23 @@ func TestParseIncoming_TextStillWorks(t *testing.T) {
 		t.Fatalf("texto puro quebrou: %+v", m)
 	}
 }
+
+func TestParseReceipt_Delivered(t *testing.T) {
+	env := []byte(`{"event":"Receipt","state":"Delivered","instanceId":"inst-1","data":{"MessageIDs":["wamid.A","wamid.B"]}}`)
+	state, ids, inst, ok := parseReceipt(env)
+	if !ok || state != "Delivered" || inst != "inst-1" || len(ids) != 2 || ids[0] != "wamid.A" {
+		t.Fatalf("bad: state=%s ids=%v inst=%s ok=%v", state, ids, inst, ok)
+	}
+}
+
+func TestParseReceipt_IgnoresNonReceipt(t *testing.T) {
+	if _, _, _, ok := parseReceipt([]byte(`{"event":"Message","data":{}}`)); ok {
+		t.Fatal("esperado ok=false para não-Receipt")
+	}
+}
+
+func TestParseReceipt_IgnoresReadSelf(t *testing.T) {
+	if _, _, _, ok := parseReceipt([]byte(`{"event":"Receipt","state":"ReadSelf","instanceId":"i","data":{"MessageIDs":["x"]}}`)); ok {
+		t.Fatal("esperado ok=false para ReadSelf")
+	}
+}

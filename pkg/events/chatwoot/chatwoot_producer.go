@@ -147,10 +147,37 @@ func parseIncoming(payload []byte) (*incomingMsg, bool) {
 	return base, true
 }
 
+// parseReceipt extrai o estado e os wamids de um envelope de Receipt.
+// Retorna ok=false para não-Receipt ou ReadSelf (ignorado).
+func parseReceipt(payload []byte) (state string, wamids []string, instanceID string, ok bool) {
+	var env struct {
+		Event      string `json:"event"`
+		State      string `json:"state"`
+		InstanceID string `json:"instanceId"`
+		Data       struct {
+			MessageIDs []string `json:"MessageIDs"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(payload, &env); err != nil {
+		return "", nil, "", false
+	}
+	if env.Event != "Receipt" {
+		return "", nil, "", false
+	}
+	if env.State != "Delivered" && env.State != "Read" {
+		return "", nil, "", false
+	}
+	if len(env.Data.MessageIDs) == 0 {
+		return "", nil, "", false
+	}
+	return env.State, env.Data.MessageIDs, env.InstanceID, true
+}
+
 type chatwootProducer struct {
-	configRepo    chatwoot_repository.ChatwootConfigRepository
-	instanceRepo  instance_repository.InstanceRepository
-	loggerWrapper *logger_wrapper.LoggerManager
+	configRepo     chatwoot_repository.ChatwootConfigRepository
+	instanceRepo   instance_repository.InstanceRepository
+	messageMapRepo chatwoot_repository.MessageMapRepository
+	loggerWrapper  *logger_wrapper.LoggerManager
 	// cache jid -> conversationID por instancia, para pular lookups
 	convCache sync.Map // key: instanceID+"|"+jid  value: convCacheEntry
 	// workers mantem um worker goroutine por cacheKey (instanceID+"|"+jid), que
@@ -171,12 +198,14 @@ type convCacheEntry struct {
 func NewChatwootProducer(
 	configRepo chatwoot_repository.ChatwootConfigRepository,
 	instanceRepo instance_repository.InstanceRepository,
+	messageMapRepo chatwoot_repository.MessageMapRepository,
 	loggerWrapper *logger_wrapper.LoggerManager,
 ) producer_interfaces.Producer {
 	return &chatwootProducer{
-		configRepo:    configRepo,
-		instanceRepo:  instanceRepo,
-		loggerWrapper: loggerWrapper,
+		configRepo:     configRepo,
+		instanceRepo:   instanceRepo,
+		messageMapRepo: messageMapRepo,
+		loggerWrapper:  loggerWrapper,
 	}
 }
 
@@ -185,6 +214,11 @@ func (p *chatwootProducer) CreateGlobalQueues() error { return nil }
 // Produce recebe o envelope de evento e o enfileira no worker responsavel
 // pelo JID de origem, preservando a ordem de chegada por conversa.
 func (p *chatwootProducer) Produce(queueName string, payload []byte, _ string, userID string) error {
+	if _, _, _, ok := parseReceipt(payload); ok {
+		go p.handleReceipt(payload, userID)
+		return nil
+	}
+
 	msg, ok := parseIncoming(payload)
 	if !ok {
 		return nil
@@ -193,6 +227,35 @@ func (p *chatwootProducer) Produce(queueName string, payload []byte, _ string, u
 	cacheKey := msg.InstanceID + "|" + msg.JID
 	p.workerFor(cacheKey, userID) <- payload
 	return nil
+}
+
+// handleReceipt propaga o status de entrega/leitura de um Receipt do WhatsApp
+// para a mensagem correspondente no Chatwoot, via message_maps. Roda em sua
+// própria goroutine (não é per-JID: um Receipt referencia N wamids).
+func (p *chatwootProducer) handleReceipt(payload []byte, userID string) {
+	log := p.loggerWrapper.GetLogger(userID)
+	state, wamids, _, ok := parseReceipt(payload)
+	if !ok {
+		return
+	}
+	status := "delivered"
+	if state == "Read" {
+		status = "read"
+	}
+	cfg, err := p.configRepo.Get()
+	if err != nil || cfg == nil {
+		return
+	}
+	client := chatwoot_client.NewClient(cfg.BaseURL, cfg.APIToken, cfg.AccountID)
+	for _, wamid := range wamids {
+		m, err := p.messageMapRepo.Get(wamid)
+		if err != nil || m == nil {
+			continue // wamid não mapeado (ex.: msg antiga) — ignora
+		}
+		if err := client.UpdateMessageStatus(m.ConversationID, m.MessageID, status); err != nil {
+			log.LogError("[%s] chatwoot: falha ao atualizar status (%s): %v", userID, status, err)
+		}
+	}
 }
 
 // workerFor retorna o channel do worker responsavel por cacheKey, criando-o
