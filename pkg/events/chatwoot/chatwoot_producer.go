@@ -72,19 +72,17 @@ type chatwootProducer struct {
 	configRepo    chatwoot_repository.ChatwootConfigRepository
 	instanceRepo  instance_repository.InstanceRepository
 	loggerWrapper *logger_wrapper.LoggerManager
-	// cache jid -> conversationID por instância, para pular lookups
+	// cache jid -> conversationID por instancia, para pular lookups
 	convCache sync.Map // key: instanceID+"|"+jid  value: convCacheEntry
-	// keyLocks serializa a seção check-then-create de contato/conversa por cacheKey,
-	// evitando que duas goroutines para o mesmo JID criem conversas duplicadas.
-	// JIDs diferentes continuam processando em paralelo.
-	keyLocks sync.Map // key: cacheKey (string)  value: *sync.Mutex
+	// workers mantem um worker goroutine por cacheKey (instanceID+"|"+jid), que
+	// drena seu channel em ordem FIFO. Isso garante que mensagens do mesmo JID
+	// sejam processadas na ordem de chegada, enquanto JIDs diferentes continuam
+	// em paralelo. O worker tambem serializa a secao check-then-create de
+	// contato/conversa para sua key, entao nenhum mutex extra e necessario.
+	workers sync.Map // key: cacheKey (string)  value: chan []byte
 }
 
-// lockKey retorna (criando se necessário) o mutex associado a cacheKey.
-func (p *chatwootProducer) lockKey(cacheKey string) *sync.Mutex {
-	m, _ := p.keyLocks.LoadOrStore(cacheKey, &sync.Mutex{})
-	return m.(*sync.Mutex)
-}
+const workerChanBuffer = 64
 
 type convCacheEntry struct {
 	ContactID      int
@@ -105,10 +103,39 @@ func NewChatwootProducer(
 
 func (p *chatwootProducer) CreateGlobalQueues() error { return nil }
 
-// Produce recebe o envelope de evento; roda de forma assíncrona.
+// Produce recebe o envelope de evento e o enfileira no worker responsavel
+// pelo JID de origem, preservando a ordem de chegada por conversa.
 func (p *chatwootProducer) Produce(queueName string, payload []byte, _ string, userID string) error {
-	go p.handle(payload, userID)
+	msg, ok := parseIncomingText(payload)
+	if !ok {
+		return nil
+	}
+
+	cacheKey := msg.InstanceID + "|" + msg.JID
+	p.workerFor(cacheKey, userID) <- payload
 	return nil
+}
+
+// workerFor retorna o channel do worker responsavel por cacheKey, criando-o
+// (e iniciando sua unica goroutine consumidora) na primeira chamada para essa
+// key. A goroutine drena o channel em ordem FIFO, entao mensagens do mesmo
+// JID sao processadas na ordem de chegada; JIDs diferentes tem workers
+// distintos e continuam em paralelo. Como apenas essa goroutine chama handle
+// para a key, a secao check-then-create de contato/conversa fica serializada
+// sem necessidade de mutex. O worker vive pela duracao do processo, mesmo
+// trade-off ja aceito para o convCache (sem eviction).
+func (p *chatwootProducer) workerFor(cacheKey, userID string) chan []byte {
+	newCh := make(chan []byte, workerChanBuffer)
+	actual, loaded := p.workers.LoadOrStore(cacheKey, newCh)
+	ch := actual.(chan []byte)
+	if !loaded {
+		go func() {
+			for payload := range ch {
+				p.handle(payload, userID)
+			}
+		}()
+	}
+	return ch
 }
 
 func (p *chatwootProducer) handle(payload []byte, userID string) {
@@ -142,34 +169,40 @@ func (p *chatwootProducer) handle(payload []byte, userID string) {
 		return
 	}
 
-	// Serializa check-then-create por cacheKey (instância+JID), para que duas
-	// mensagens concorrentes do mesmo contato não criem conversas duplicadas.
-	// JIDs diferentes possuem mutexes distintos e continuam em paralelo.
-	mu := p.lockKey(cacheKey)
-	mu.Lock()
-	defer mu.Unlock()
-
-	if v, ok := p.convCache.Load(cacheKey); ok {
-		entry := v.(convCacheEntry)
-		if err := client.CreateIncomingMessage(entry.ConversationID, msg.Text, msg.Wamid); err != nil {
-			log.LogError("[%s] chatwoot: falha ao injetar mensagem: %v", userID, err)
+	// Sem entrada em cache (primeira mensagem do JID, ou cache perdido em um
+	// restart): reconcilia com o Chatwoot (fonte da verdade) em vez de criar
+	// contato/conversa as cegas, para nao falhar no 422 de telefone duplicado
+	// nem criar conversas duplicadas apos um restart.
+	phone := phoneFromJID(msg.JID)
+	contact, err := client.FindContactByPhone(phone)
+	if err != nil {
+		log.LogError("[%s] chatwoot: falha ao buscar contato: %v", userID, err)
+		return
+	}
+	if contact == nil {
+		contact, err = client.FindOrCreateContact(msg.PushName, phone, msg.JID, inboxID)
+		if err != nil {
+			log.LogError("[%s] chatwoot: falha contato: %v", userID, err)
+			return
 		}
-		return
 	}
 
-	contact, err := client.FindOrCreateContact(msg.PushName, phoneFromJID(msg.JID), msg.JID, inboxID)
+	convID, ok, err := client.FindOpenConversation(contact.ID)
 	if err != nil {
-		log.LogError("[%s] chatwoot: falha contato: %v", userID, err)
+		log.LogError("[%s] chatwoot: falha ao buscar conversa: %v", userID, err)
 		return
 	}
-	conv, err := client.CreateConversation(inboxID, contact.ID, msg.JID)
-	if err != nil {
-		log.LogError("[%s] chatwoot: falha conversa: %v", userID, err)
-		return
+	if !ok {
+		conv, err := client.CreateConversation(inboxID, contact.ID, msg.JID)
+		if err != nil {
+			log.LogError("[%s] chatwoot: falha conversa: %v", userID, err)
+			return
+		}
+		convID = conv.ID
 	}
-	p.convCache.Store(cacheKey, convCacheEntry{ContactID: contact.ID, ConversationID: conv.ID})
+	p.convCache.Store(cacheKey, convCacheEntry{ContactID: contact.ID, ConversationID: convID})
 
-	if err := client.CreateIncomingMessage(conv.ID, msg.Text, msg.Wamid); err != nil {
+	if err := client.CreateIncomingMessage(convID, msg.Text, msg.Wamid); err != nil {
 		log.LogError("[%s] chatwoot: falha ao injetar mensagem: %v", userID, err)
 	}
 }
