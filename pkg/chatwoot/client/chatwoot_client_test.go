@@ -223,6 +223,33 @@ func TestDownloadFromChatwootRewritesHost(t *testing.T) {
 	}
 }
 
+// Quando o Chatwoot usa S3/MinIO, a data_url é um redirect do Chatwoot para uma URL
+// presigned em OUTRO host. O host do Chatwoot é reescrito p/ o interno; o redirect
+// para o host de object storage passa intacto (não pode ser reescrito).
+func TestDownloadFromChatwootFollowsForeignRedirect(t *testing.T) {
+	s3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		w.Write([]byte("S3DATA"))
+	}))
+	defer s3.Close()
+	// chatwoot (base) redireciona para o host do "s3".
+	chatwoot := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, s3.URL+"/bucket/file.png?sig=abc", http.StatusFound)
+	}))
+	defer chatwoot.Close()
+
+	c := NewClient(chatwoot.URL, "tok", "1")
+	// data_url usa um host "público" do chatwoot (localhost:9) que é reescrito para o
+	// host interno (chatwoot); o redirect para o host do s3 NÃO é reescrito.
+	data, ct, err := c.DownloadFromChatwoot("http://localhost:9/rails/active_storage/blobs/redirect/x/file.png")
+	if err != nil {
+		t.Fatalf("DownloadFromChatwoot: %v", err)
+	}
+	if string(data) != "S3DATA" || ct != "image/png" {
+		t.Fatalf("esperado seguir o redirect p/ o s3 intacto, got %q %q", data, ct)
+	}
+}
+
 func TestDownloadBytesDoesNotRewriteHost(t *testing.T) {
 	var hitB bool
 	srvA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
