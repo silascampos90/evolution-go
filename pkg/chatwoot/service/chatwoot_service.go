@@ -199,8 +199,14 @@ type ReconnectResult struct {
 // sync de status depende. Isso também cura uma instância que ficou com Events
 // vazio depois de um Disconnect.
 func (s *ChatwootService) ReconnectLink(name string) (*ReconnectResult, error) {
+	// Mesma disciplina do CreateLink: só "não encontrado" é ausência; qualquer
+	// outro erro do banco é propagado com a causa real, em vez de virar um
+	// enganoso "conexão não encontrada" na cara do operador.
 	instance, err := s.instanceRepo.GetInstanceByName(name)
-	if err != nil || instance == nil {
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("buscar instância: %w", err)
+	}
+	if instance == nil {
 		return nil, fmt.Errorf("conexão %q não encontrada", name)
 	}
 	if !instance.ChatwootEnabled || instance.ChatwootInboxID == "" {

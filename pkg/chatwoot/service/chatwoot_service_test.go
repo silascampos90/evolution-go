@@ -331,3 +331,24 @@ func TestReconnectLink_RejectsInstanceWithoutChatwootLink(t *testing.T) {
 		t.Fatal("expected ReconnectLink to reject an instance that is not linked to Chatwoot")
 	}
 }
+
+// Fail closed: um erro de banco diferente de "não encontrado" ao buscar a
+// instância não pode virar um enganoso "conexão não encontrada". A causa real
+// deve ser propagada (com %w).
+func TestReconnectLink_DatabaseErrorDuringNameCheckFailsClosed(t *testing.T) {
+	instRepo := newFakeInstanceRepo()
+	instRepo.getErr = errors.New("connection refused")
+
+	svc := NewChatwootService(&fakeConfigRepo{}, instRepo, newFakeInstanceService(), "http://evolution-go:8080", "evolution", newTestLogger(t))
+	_, err := svc.ReconnectLink("qualquer")
+	if err == nil {
+		t.Fatal("expected ReconnectLink to fail when the name check errors")
+	}
+	// Verifica que o erro contém a causa real, não "não encontrada"
+	if !strings.Contains(err.Error(), "connection refused") {
+		t.Fatalf("expected error to contain the underlying cause, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "não encontrada") {
+		t.Fatalf("expected error NOT to contain 'não encontrada', got: %v", err)
+	}
+}
