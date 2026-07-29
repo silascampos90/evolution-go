@@ -292,6 +292,10 @@ func TestCreateLink_RollsBackInboxWhenInstanceCreationFails(t *testing.T) {
 // do corpo da requisição, e com Subscribe vazio reduz a assinatura a só
 // MESSAGE — o que mataria o sync de status (READ_RECEIPT). ReconnectLink
 // precisa passar os dois eventos explicitamente e preservar o webhook.
+//
+// O Connect sobrescreve (e persiste) CINCO campos, não dois: Rabbitmq, Nats e
+// WebSocket são string e vazio significa desligado, então não repassá-los
+// desligava o fan-out de eventos de quem usa fila, em silêncio.
 func TestReconnectLink_PreservesEventsAndWebhook(t *testing.T) {
 	instRepo := newFakeInstanceRepo()
 	instRepo.byName["vendas"] = &instance_model.Instance{
@@ -299,6 +303,9 @@ func TestReconnectLink_PreservesEventsAndWebhook(t *testing.T) {
 		Name:            "vendas",
 		Token:           "vendas-abc",
 		Webhook:         "https://cliente.example/hook",
+		RabbitmqEnable:  "enabled",
+		NatsEnable:      "true",
+		WebSocketEnable: "enabled",
 		ChatwootEnabled: true,
 		ChatwootInboxID: "42",
 	}
@@ -322,6 +329,15 @@ func TestReconnectLink_PreservesEventsAndWebhook(t *testing.T) {
 	}
 	if instSvc.connectedTo.WebhookUrl != "https://cliente.example/hook" {
 		t.Fatalf("expected the existing webhook to be preserved, got %q", instSvc.connectedTo.WebhookUrl)
+	}
+	if instSvc.connectedTo.RabbitmqEnable != "enabled" {
+		t.Fatalf("expected RabbitmqEnable to survive the reconnect, got %q", instSvc.connectedTo.RabbitmqEnable)
+	}
+	if instSvc.connectedTo.NatsEnable != "true" {
+		t.Fatalf("expected NatsEnable to survive the reconnect, got %q", instSvc.connectedTo.NatsEnable)
+	}
+	if instSvc.connectedTo.WebSocketEnable != "enabled" {
+		t.Fatalf("expected WebSocketEnable to survive the reconnect, got %q", instSvc.connectedTo.WebSocketEnable)
 	}
 }
 

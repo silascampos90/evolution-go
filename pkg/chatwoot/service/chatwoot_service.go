@@ -226,9 +226,16 @@ func (s *ChatwootService) ReconnectLink(name string) (*ReconnectResult, error) {
 		return nil, fmt.Errorf("a instância %q não está vinculada a uma inbox do Chatwoot", name)
 	}
 
+	// Os CINCO campos que Connect sobrescreve precisam ser relidos da instância.
+	// Rabbitmq/Nats/WebSocket são string: vazio significa desligado, e o Connect
+	// PERSISTE isso. Passar só Subscribe e WebhookUrl desligaria silenciosamente
+	// o fan-out de eventos de quem usa fila — sem erro, sem log.
 	_, _, _, err = s.instanceSvc.Connect(&instance_service.ConnectStruct{
-		Subscribe:  []string{event_types.MESSAGE, event_types.READ_RECEIPT},
-		WebhookUrl: instance.Webhook,
+		Subscribe:       []string{event_types.MESSAGE, event_types.READ_RECEIPT},
+		WebhookUrl:      instance.Webhook,
+		RabbitmqEnable:  instance.RabbitmqEnable,
+		NatsEnable:      instance.NatsEnable,
+		WebSocketEnable: instance.WebSocketEnable,
 	}, instance)
 	if err != nil {
 		return nil, fmt.Errorf("religar instância: %w", err)
