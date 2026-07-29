@@ -1177,7 +1177,46 @@ git commit -m "feat(chatwoot): add GetConfig, DeleteLink and expose instance tok
 
 **Interfaces:**
 - Consumes: `ChatwootService.GetConfig`, `.ReconnectLink`, `.DeleteLink` (Tasks 5-6)
-- Produces: rotas `GET /chatwoot/config`, `POST /chatwoot/links/:instance/reconnect`, `DELETE /chatwoot/links/:instance`
+- Produces: rotas `GET /chatwoot/config`, `POST /chatwoot/links/:instance/reconnect`, `DELETE /chatwoot/links/:instance`; sentinela `chatwoot_service.ErrLinkAlreadyExists`
+
+- [ ] **Step 0: Mapear conflito de nome para 409, não 500**
+
+Com o `CreateLink` corrigido, "já existe uma conexão com esse nome" virou um erro **esperado** do fluxo — é o que o operador recebe ao tentar criar em vez de reconectar. Hoje `PostLink` responde `500` para qualquer erro (`admin_handler.go:71`), o que faz um erro de uso parecer falha do servidor e atrapalha a mensagem que a tela vai mostrar.
+
+Em `pkg/chatwoot/service/chatwoot_service.go`, declarar a sentinela junto dos outros tipos do pacote:
+
+```go
+// ErrLinkAlreadyExists indica que já existe uma instância com o nome pedido.
+// É um erro de uso esperado (o operador deveria reconectar), não uma falha —
+// o handler o mapeia para 409.
+var ErrLinkAlreadyExists = errors.New("conexão já existe")
+```
+
+E, no `CreateLink`, envolver a sentinela em vez de criar o erro solto:
+
+```go
+	if existing != nil {
+		return nil, fmt.Errorf("%w: %q; use Reconectar em vez de criar outra", ErrLinkAlreadyExists, name)
+	}
+```
+
+Ajustar `TestCreateLink_ExistingInstanceDoesNotTouchChatwoot` para também afirmar `errors.Is(err, ErrLinkAlreadyExists)` — sem isso o mapeamento do handler não tem rede de proteção.
+
+Então, em `admin_handler.go`, `PostLink` passa a distinguir:
+
+```go
+	res, err := h.service.CreateLink(body.Name)
+	if err != nil {
+		if errors.Is(err, chatwoot_service.ErrLinkAlreadyExists) {
+			ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+```
+
+Adicionar `"errors"` aos imports de `admin_handler.go`.
 
 - [ ] **Step 1: Adicionar os handlers**
 
@@ -1238,16 +1277,60 @@ Substituir o bloco `api := eng.Group("/chatwoot")` em `routes.go:18-25` por:
 Run: `go build ./... && go vet ./pkg/chatwoot/...`
 Expected: build OK, sem panic. O Gin faz panic em tempo de registro se houver conflito de wildcard — se acontecer, o binário falha ao subir, então o próximo passo é obrigatório.
 
-- [ ] **Step 4: Subir o servidor e conferir que as rotas respondem**
+- [ ] **Step 4: Testar o registro de rotas sem subir o servidor inteiro**
 
-Run: `go run ./cmd/evolution-go` num terminal e, noutro:
+Subir o binário exigiria banco e config completos. Em vez disso, um teste que monta um `gin.Engine` só com essas rotas e confirma que elas existem e que o middleware de admin barra quem não tem apikey. Criar `pkg/chatwoot/routes_test.go`:
 
-```bash
-curl -s -o /dev/null -w '%{http_code}\n' -H "apikey: $GLOBAL_API_KEY" http://localhost:8080/chatwoot/config
-curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8080/chatwoot/config
+```go
+package chatwoot_routes
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	chatwoot_handler "github.com/evolution-foundation/evolution-go/pkg/chatwoot/handler"
+	"github.com/gin-gonic/gin"
+)
+
+// denyAll simula o AuthAdmin rejeitando uma requisição sem apikey válida.
+func denyAll(ctx *gin.Context) {
+	ctx.AbortWithStatus(http.StatusUnauthorized)
+}
+
+// TestRegister_RoutesExistAndAreAdminGuarded garante duas coisas: que o Register
+// não entra em panic por conflito de wildcard no Gin (o que derrubaria o binário
+// no boot), e que as rotas novas ficam atrás do middleware de admin.
+func TestRegister_RoutesExistAndAreAdminGuarded(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	eng := gin.New()
+	Register(eng, chatwoot_handler.NewAdminHandler(nil), nil, denyAll)
+
+	cases := []struct{ method, path string }{
+		{http.MethodGet, "/chatwoot/config"},
+		{http.MethodPut, "/chatwoot/config"},
+		{http.MethodPost, "/chatwoot/config/test"},
+		{http.MethodGet, "/chatwoot/links"},
+		{http.MethodPost, "/chatwoot/links"},
+		{http.MethodPost, "/chatwoot/links/vendas/reconnect"},
+		{http.MethodDelete, "/chatwoot/links/vendas"},
+	}
+	for _, c := range cases {
+		rec := httptest.NewRecorder()
+		eng.ServeHTTP(rec, httptest.NewRequest(c.method, c.path, nil))
+		if rec.Code == http.StatusNotFound {
+			t.Errorf("%s %s não está registrada", c.method, c.path)
+			continue
+		}
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("%s %s deveria ser barrada pelo AuthAdmin, got %d", c.method, c.path, rec.Code)
+		}
+	}
+}
 ```
 
-Expected: `200` na primeira (com apikey) e `401` na segunda (sem apikey). Encerrar o servidor depois.
+Run: `go test ./pkg/chatwoot/... -run TestRegister -v`
+Expected: PASS. Se `Register` tiver conflito de rota, o Gin entra em panic aqui — que é exatamente o que queremos pegar antes do deploy, já que em produção isso impediria o binário de subir.
 
 - [ ] **Step 5: Commit**
 
