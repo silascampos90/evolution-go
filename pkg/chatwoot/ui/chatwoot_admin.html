@@ -75,6 +75,7 @@
 
     /* Escala de empilhamento nomeada — nada de 999. */
     --z-header: 20;
+    --z-dropdown: 30;
     --z-overlay: 40;
     --z-dialog: 50;
     --z-toast: 60;
@@ -369,6 +370,30 @@
     text-wrap: pretty;
   }
 
+  /* Checkbox com rótulo de frase longa — usado pela opção destrutiva do
+     modal de remoção. */
+  .checkbox-field {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-top: 18px;
+    font-size: 13px;
+    color: var(--muted-foreground-strong);
+    cursor: pointer;
+  }
+
+  .checkbox-field input {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    margin-top: 2px;
+    /* Acento na cor destrutiva: o próprio controle já avisa o que ele faz
+       quando marcado, sem precisar de mais texto de aviso. */
+    accent-color: var(--destructive-solid);
+  }
+
+  .checkbox-field span { text-wrap: pretty; }
+
   .hint code, .checklist code {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: .92em;
@@ -420,10 +445,20 @@
     border-color: var(--border);
   }
 
+  /* Conexão sem sessão pareada — mesmo par de cores do neutro, nome próprio
+     para não confundir com o "Não configurado" do cabeçalho. */
+  .badge.off {
+    color: var(--muted-foreground-strong);
+    background: var(--muted);
+    border-color: var(--border);
+  }
+
   /* ---------------------------------------------------------------------- */
   /* Componentes — superfícies (painel, skeleton, estado vazio)              */
   /* ---------------------------------------------------------------------- */
   .card {
+    /* relative: âncora do menu "⋯" (.card-menu-wrap), adicionado na Task 9. */
+    position: relative;
     background: var(--card);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
@@ -435,6 +470,100 @@
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
     gap: 12px;
+  }
+
+  /* Cartão de conexão — cabeçalho com status e menu, corpo com identificação,
+     rodapé com as duas ações mais usadas (as demais vão no menu). */
+  .card-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .card-title {
+    margin-top: 12px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+
+  .card-number {
+    margin-top: 2px;
+    color: var(--muted-foreground);
+    font-size: 13px;
+    overflow-wrap: anywhere;
+  }
+
+  .card-inbox {
+    margin-top: 10px;
+    font-size: 12.5px;
+    color: var(--muted-foreground);
+  }
+
+  .card-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 14px;
+  }
+
+  /* min-width:0 permite o flex encolher abaixo do texto; sem isso o rótulo
+     mais longo ("Abrir no Chatwoot") empurraria o cartão e criaria rolagem
+     horizontal em telas estreitas. */
+  .card-actions .btn {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Menu "⋯" — âncora relativa só no wrapper, para não interferir no
+     space-between do cabeçalho do cartão. */
+  .card-menu-wrap { position: relative; flex: none; }
+
+  .card-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: var(--z-dropdown);
+    min-width: 200px;
+    padding: 4px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-4px);
+    transition: opacity 140ms var(--ease), transform 140ms var(--ease), visibility 0s linear 140ms;
+  }
+
+  .card-menu.open {
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+    transition: opacity 140ms var(--ease), transform 140ms var(--ease), visibility 0s;
+  }
+
+  .card-menu button {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    padding: 8px 10px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--foreground);
+    font: inherit;
+    font-size: 13.5px;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .card-menu button:hover { background: var(--muted); }
+
+  .card-menu button.danger { color: var(--destructive-text); }
+  .card-menu button.danger:hover {
+    background: color-mix(in oklab, var(--destructive) 12%, var(--card));
   }
 
   .empty {
@@ -616,6 +745,11 @@
     padding: 20px;
   }
 
+  /* Parágrafo de instrução antes de um campo (modal de remoção) — .field só
+     ganha espaçamento de outro .field antecessor, então sem isso o campo
+     colaria no texto acima. */
+  .dialog-body > p { margin-bottom: 12px; }
+
   .dialog-foot {
     display: flex;
     gap: 8px;
@@ -715,7 +849,7 @@
   /* vira corte seco.                                                        */
   /* ---------------------------------------------------------------------- */
   @media (prefers-reduced-motion: reduce) {
-    .btn, .input, .overlay, .sheet, .modal, .modal-wrap, .toast {
+    .btn, .input, .overlay, .sheet, .modal, .modal-wrap, .toast, .card-menu {
       transition-duration: 1ms !important;
     }
     .toast { animation: none; }
@@ -808,7 +942,8 @@
     <button class="btn btn-primary" id="open-config-cta" type="button">Configurar agora</button>
   </div>
 
-  <!-- Lista de conexões. A Task 9 substitui renderLinks() por cards com ações. -->
+  <!-- Lista de conexões, com reconectar, abrir no Chatwoot e o menu "⋯"
+       (encerrar sessão / remover). -->
   <div class="cards" id="cards"></div>
 </main>
 
@@ -885,6 +1020,40 @@
   </div>
 </div>
 
+<!-- Modal de remoção — confirmação exige digitar o nome exato da conexão.
+     Nunca window.prompt/confirm: aqui dá pra ter um checkbox de verdade para
+     a opção destrutiva (apagar a inbox), desmarcado por padrão. -->
+<div class="modal-wrap" id="remove-modal" role="dialog" aria-modal="true" aria-labelledby="remove-title" inert>
+  <div class="modal">
+    <div class="dialog-head">
+      <div>
+        <h2 id="remove-title">Remover conexão</h2>
+        <p class="hint">Desfaz o vínculo no evolution; a inbox no Chatwoot fica, a menos que você marque abaixo.</p>
+      </div>
+      <button class="btn btn-ghost btn-icon btn-sm" type="button" data-close-dialog aria-label="Fechar remoção">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+
+    <div class="dialog-body">
+      <p>Para confirmar, digite <strong id="remove-target-name"></strong> abaixo:</p>
+      <div class="field">
+        <label class="label sr-only" for="remove-confirm-input">Nome da conexão, para confirmar a remoção</label>
+        <input class="input" type="text" id="remove-confirm-input" autocomplete="off" spellcheck="false">
+      </div>
+      <label class="checkbox-field">
+        <input type="checkbox" id="remove-delete-inbox">
+        <span>Apagar também a inbox <strong id="remove-inbox-label"></strong> no Chatwoot — isso destrói o histórico de conversas dela.</span>
+      </label>
+    </div>
+
+    <div class="dialog-foot">
+      <button class="btn grow" type="button" data-close-dialog>Cancelar</button>
+      <button class="btn btn-danger" id="remove-submit" type="button" disabled>Remover</button>
+    </div>
+  </div>
+</div>
+
 <script>
   /* ---------------------------------------------------------------------- */
   /* Helpers — apikey e chamadas HTTP                                        */
@@ -928,9 +1097,14 @@
   }
 
   // Chamadas autenticadas com o token da INSTÂNCIA (não com a apikey global).
-  async function instanceFetch(path, instanceToken) {
+  // `options` é opcional e segue o mesmo formato do fetch (method, body, ...);
+  // sem ele o comportamento é o mesmo GET de sempre — quem já chama com dois
+  // argumentos não muda.
+  async function instanceFetch(path, instanceToken, options) {
+    options = options || {};
+    const headers = Object.assign({}, options.headers, { apikey: instanceToken });
     try {
-      const res = await fetch(path, { headers: { apikey: instanceToken } });
+      const res = await fetch(path, Object.assign({}, options, { headers }));
       let data = null;
       try {
         data = await res.json();
@@ -1221,51 +1395,228 @@
       '<div class="card"><div class="skeleton" style="height:16px;width:55%"></div>' +
       '<div class="skeleton" style="height:13px;width:38%;margin-top:12px"></div></div>' +
       '<div class="card"><div class="skeleton" style="height:16px;width:45%"></div>' +
-      '<div class="skeleton" style="height:13px;width:52%;margin-top:12px"></div></div>';
+      '<div class="skeleton" style="height:13px;width:52%;margin-top:12px"></div></div>' +
+      '<div class="card"><div class="skeleton" style="height:16px;width:50%"></div>' +
+      '<div class="skeleton" style="height:13px;width:44%;margin-top:12px"></div></div>';
   }
 
-  // Renderização mínima e somente leitura. A Task 9 troca esta função pelos
-  // cards com ações (reconectar, abrir inbox, remover).
-  function renderLinks(links) {
+  // Snapshot dos links do último render — o menu e o modal de remoção
+  // consultam aqui em vez de recomputar a partir de atributos data-*.
+  let currentLinks = [];
+
+  function statusOf(link) {
+    if (link.connected) return { dot: 'ok', label: 'Conectado' };
+    if (!link.number) return { dot: 'warn', label: 'Aguardando pareamento' };
+    return { dot: 'off', label: 'Desconectado' };
+  }
+
+  function renderCards(links) {
+    currentLinks = links || [];
+    closeCardMenu();
     cardsEl.innerHTML = '';
-    if (!links || links.length === 0) {
+    if (currentLinks.length === 0) {
+      // Sem config o estado guiado já ocupa a tela — não duplica o aviso aqui.
       if (chatwootConfig.configured) {
         cardsEl.innerHTML =
           '<div class="empty" style="grid-column:1/-1">' +
           '<strong>Nenhuma conexão ainda</strong>' +
-          'Crie a primeira para ligar um número de WhatsApp a uma inbox.' +
+          'Use "Nova conexão" para criar a primeira.' +
           '</div>';
       }
       return;
     }
-    links.forEach((link) => {
+    currentLinks.forEach((link) => {
+      const st = statusOf(link);
+      const name = escapeHtml(link.instanceName);
       const card = document.createElement('div');
       card.className = 'card';
       card.innerHTML =
-        '<div style="display:flex;align-items:center;gap:8px;justify-content:space-between">' +
-          '<span style="font-weight:600;overflow-wrap:anywhere">' + escapeHtml(link.instanceName) + '</span>' +
-          '<span class="badge ' + (link.connected ? 'ok' : 'warn') + '">' +
-            (link.connected ? 'Conectado' : 'Aguardando pareamento') +
-          '</span>' +
+        '<div class="card-head">' +
+          '<span class="badge ' + st.dot + '">' + st.label + '</span>' +
+          '<div class="card-menu-wrap">' +
+            '<button class="btn btn-ghost btn-icon btn-sm" type="button" data-menu-trigger="' + name + '" ' +
+              'aria-haspopup="true" aria-expanded="false" aria-label="Mais ações para ' + name + '">' +
+              '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">' +
+                '<circle cx="12" cy="5" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="12" cy="19" r="1.8"/>' +
+              '</svg>' +
+            '</button>' +
+            '<div class="card-menu">' +
+              '<button type="button" data-logout="' + name + '">Encerrar sessão</button>' +
+              '<button type="button" class="danger" data-remove="' + name + '">Remover</button>' +
+            '</div>' +
+          '</div>' +
         '</div>' +
-        '<div class="hint" style="margin-top:8px">' + escapeHtml(displayNumber(link.number)) + '</div>' +
-        '<div class="hint" style="margin-top:4px">Inbox ' +
-          '<a href="' + escapeHtml(inboxUrl(link.inboxId)) + '" target="_blank" rel="noopener">#' +
-          escapeHtml(String(link.inboxId)) + '</a></div>';
+        '<div class="card-title">' + name + '</div>' +
+        '<div class="card-number">' + escapeHtml(displayNumber(link.number)) + '</div>' +
+        '<div class="card-inbox">Inbox #' + escapeHtml(String(link.inboxId)) + '</div>' +
+        '<div class="card-actions">' +
+          '<button class="btn btn-primary" type="button" data-reconnect="' + name + '">Reconectar</button>' +
+          '<a class="btn" target="_blank" rel="noopener" href="' + escapeHtml(inboxUrl(link.inboxId)) + '">Abrir no Chatwoot</a>' +
+        '</div>';
       cardsEl.appendChild(card);
     });
   }
 
+  /* ---------------------------------------------------------------------- */
+  /* Menu "⋯" do cartão — dropdown leve, fora da máquina de diálogo         */
+  /* compartilhada (não é modal: sem foco preso, sem inert).                */
+  /* ---------------------------------------------------------------------- */
+  let openMenuTrigger = null;
+
+  function closeCardMenu() {
+    if (!openMenuTrigger) return;
+    const wrap = openMenuTrigger.closest('.card-menu-wrap');
+    const menu = wrap && wrap.querySelector('.card-menu');
+    if (menu) menu.classList.remove('open');
+    openMenuTrigger.setAttribute('aria-expanded', 'false');
+    openMenuTrigger = null;
+  }
+
+  function toggleCardMenu(trigger) {
+    const wasOpen = trigger === openMenuTrigger;
+    closeCardMenu();
+    if (wasOpen) return;
+    const menu = trigger.closest('.card-menu-wrap').querySelector('.card-menu');
+    menu.classList.add('open');
+    trigger.setAttribute('aria-expanded', 'true');
+    openMenuTrigger = trigger;
+    const firstItem = menu.querySelector('button');
+    if (firstItem) firstItem.focus();
+  }
+
+  // Fecha ao clicar fora ou ao mover o foco para fora do menu (teclado).
+  document.addEventListener('click', (ev) => {
+    if (openMenuTrigger && !ev.target.closest('.card-menu-wrap')) closeCardMenu();
+  });
+  document.addEventListener('focusin', (ev) => {
+    if (openMenuTrigger && !ev.target.closest('.card-menu-wrap')) closeCardMenu();
+  });
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && openMenuTrigger) {
+      const trigger = openMenuTrigger;
+      closeCardMenu();
+      trigger.focus();
+    }
+  });
+
+  /* ---------------------------------------------------------------------- */
+  /* Ações do cartão — delegadas no container, os cards são recriados a     */
+  /* cada render.                                                            */
+  /* ---------------------------------------------------------------------- */
+  cardsEl.addEventListener('click', async (ev) => {
+    const menuTrigger = ev.target.closest('[data-menu-trigger]');
+    if (menuTrigger) {
+      toggleCardMenu(menuTrigger);
+      return;
+    }
+
+    const reconnectBtn = ev.target.closest('[data-reconnect]');
+    if (reconnectBtn) {
+      const name = reconnectBtn.dataset.reconnect;
+      setLoading(reconnectBtn, true);
+      const { ok, status, data } = await apiFetch('/chatwoot/links/' + encodeURIComponent(name) + '/reconnect', { method: 'POST' });
+      setLoading(reconnectBtn, false);
+      if (!ok || !data || !data.data) {
+        toast('Falha ao reconectar: ' + apiError(status, data), 'error');
+        return;
+      }
+      // A Task 10 implementa openQrModal; a chamada já fica pronta aqui.
+      openQrModal(data.data.instanceToken, name, data.data.inboxId);
+      return;
+    }
+
+    const logoutBtn = ev.target.closest('[data-logout]');
+    if (logoutBtn) {
+      closeCardMenu();
+      const name = logoutBtn.dataset.logout;
+      const link = currentLinks.find((l) => l.instanceName === name);
+      if (!link) return;
+      const { ok, status, data } = await instanceFetch('/instance/logout', link.instanceToken, { method: 'DELETE' });
+      if (!ok) {
+        toast('Falha ao encerrar sessão: ' + apiError(status, data), 'error');
+        return;
+      }
+      toast('Sessão encerrada para “' + name + '”.', 'ok');
+      loadLinks();
+      return;
+    }
+
+    const removeBtn = ev.target.closest('[data-remove]');
+    if (removeBtn) {
+      closeCardMenu();
+      const link = currentLinks.find((l) => l.instanceName === removeBtn.dataset.remove);
+      if (link) openRemoveModal(link);
+      return;
+    }
+  });
+
+  /* ---------------------------------------------------------------------- */
+  /* Modal de remoção                                                        */
+  /* ---------------------------------------------------------------------- */
+  const removeModal = document.getElementById('remove-modal');
+  const removeConfirmInput = document.getElementById('remove-confirm-input');
+  const removeDeleteInboxInput = document.getElementById('remove-delete-inbox');
+  const removeSubmitBtn = document.getElementById('remove-submit');
+  const removeTargetNameEl = document.getElementById('remove-target-name');
+  const removeInboxLabelEl = document.getElementById('remove-inbox-label');
+  let removeTarget = null;
+
+  function openRemoveModal(link) {
+    removeTarget = link;
+    // textContent, não innerHTML: não precisa de escapeHtml, o navegador nunca
+    // interpreta isto como marcação.
+    removeTargetNameEl.textContent = link.instanceName;
+    removeInboxLabelEl.textContent = '#' + link.inboxId;
+    removeConfirmInput.value = '';
+    removeDeleteInboxInput.checked = false;
+    removeSubmitBtn.disabled = true;
+    openDialog(removeModal);
+  }
+
+  // O botão só habilita quando o nome digitado bate exatamente — sem atalho.
+  removeConfirmInput.addEventListener('input', () => {
+    removeSubmitBtn.disabled = !removeTarget || removeConfirmInput.value !== removeTarget.instanceName;
+  });
+
+  removeSubmitBtn.addEventListener('click', async () => {
+    if (!removeTarget || removeSubmitBtn.disabled) return;
+    const name = removeTarget.instanceName;
+    // Opt-in explícito: sem o checkbox marcado, a inbox no Chatwoot não é tocada.
+    const qs = removeDeleteInboxInput.checked ? '?deleteInbox=true' : '';
+    setLoading(removeSubmitBtn, true);
+    const { ok, status, data } = await apiFetch('/chatwoot/links/' + encodeURIComponent(name) + qs, { method: 'DELETE' });
+    setLoading(removeSubmitBtn, false);
+    if (!ok) {
+      toast('Falha ao remover: ' + apiError(status, data), 'error');
+      return;
+    }
+    removeTarget = null;
+    closeDialog();
+    toast('Conexão “' + name + '” removida.', 'ok');
+    loadLinks();
+  });
+
+  let linksLoadedOnce = false;
+
   async function loadLinks() {
-    renderSkeleton();
+    if (!linksLoadedOnce) {
+      renderSkeleton();
+      linksLoadedOnce = true;
+    }
     const { ok, status, data } = await apiFetch('/chatwoot/links');
     if (!ok || !data) {
       cardsEl.innerHTML = '';
       toast('Não carregou as conexões: ' + apiError(status, data), 'error');
       return;
     }
-    renderLinks(data.data || []);
+    renderCards(data.data || []);
   }
+
+  // Revalida em segundo plano, sem skeleton, para o status não envelhecer na
+  // tela. Sem apikey a chamada só voltaria 401 — nem tenta.
+  setInterval(() => {
+    if (getApiKey()) loadLinks();
+  }, 15000);
 
   document.getElementById('reload-links').addEventListener('click', refreshAll);
 
