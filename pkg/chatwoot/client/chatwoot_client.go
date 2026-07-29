@@ -131,6 +131,24 @@ func (c *Client) FindInboxByName(name string) (*Inbox, error) {
 	return nil, nil
 }
 
+// UpdateInboxWebhook corrige o webhook_url de uma inbox Channel::Api existente.
+// Usado ao reusar uma inbox cujo webhook aponta para uma URL antiga do evolution-go.
+func (c *Client) UpdateInboxWebhook(inboxID int, webhookURL string) error {
+	body := map[string]any{
+		"channel": map[string]any{"webhook_url": webhookURL},
+	}
+	path := fmt.Sprintf("/inboxes/%d", inboxID)
+	return c.do(http.MethodPatch, path, body, nil)
+}
+
+// DeleteInbox remove uma inbox. Usado no rollback do CreateLink e na remoção
+// explícita de um vínculo. Apagar uma inbox destrói o histórico de conversas
+// dela no Chatwoot — só chame com intenção explícita do operador.
+func (c *Client) DeleteInbox(inboxID int) error {
+	path := fmt.Sprintf("/inboxes/%d", inboxID)
+	return c.do(http.MethodDelete, path, nil, nil)
+}
+
 // FindOrCreateContact cria um contato e o contact_inbox com source_id.
 // O Chatwoot deduplica por telefone; em caso de conflito, faz a busca por source_id.
 func (c *Client) FindOrCreateContact(name, phone, sourceID string, inboxID int) (*Contact, error) {

@@ -354,3 +354,43 @@ func TestFindInboxByNameReturnsNilWhenAbsent(t *testing.T) {
 		t.Fatalf("expected nil for missing inbox, got %+v", inbox)
 	}
 }
+
+func TestUpdateInboxWebhookSendsChannelPayload(t *testing.T) {
+	var got map[string]any
+	var method, path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, path = r.Method, r.URL.Path
+		json.NewDecoder(r.Body).Decode(&got)
+		json.NewEncoder(w).Encode(map[string]any{"id": 42})
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "tok", "1")
+	if err := c.UpdateInboxWebhook(42, "http://evolution-go:8080/chatwoot/webhook/vendas"); err != nil {
+		t.Fatalf("UpdateInboxWebhook: %v", err)
+	}
+	if method != http.MethodPatch || path != "/api/v1/accounts/1/inboxes/42" {
+		t.Fatalf("unexpected request: %s %s", method, path)
+	}
+	channel, ok := got["channel"].(map[string]any)
+	if !ok || channel["webhook_url"] != "http://evolution-go:8080/chatwoot/webhook/vendas" {
+		t.Fatalf("bad body: %+v", got)
+	}
+}
+
+func TestDeleteInboxIssuesDelete(t *testing.T) {
+	var method, path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, path = r.Method, r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "tok", "1")
+	if err := c.DeleteInbox(42); err != nil {
+		t.Fatalf("DeleteInbox: %v", err)
+	}
+	if method != http.MethodDelete || path != "/api/v1/accounts/1/inboxes/42" {
+		t.Fatalf("unexpected request: %s %s", method, path)
+	}
+}
