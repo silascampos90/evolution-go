@@ -1039,7 +1039,7 @@
     <div class="field">
       <label class="label" for="cfg-api-token">Token de API</label>
       <input class="input" type="password" id="cfg-api-token" placeholder="Token de acesso da API" autocomplete="off" spellcheck="false">
-      <p class="hint">Precisa ser de um usuário administrador. O token nunca volta em claro: deixe em branco só se for reenviar os outros campos — o token precisa ser digitado novamente.</p>
+      <p class="hint">Precisa ser de um usuário administrador. O token nunca volta em claro: deixe em branco para manter o que já está salvo no servidor, ou digite um novo para substituí-lo.</p>
     </div>
 
     <div class="field">
@@ -1478,9 +1478,10 @@
 
   // Link direto para a inbox no Chatwoot, montado a partir da config carregada.
   //
-  // O baseUrl vem do banco e o backend só valida que não é vazio
-  // (admin_handler.go:34), então o esquema é conferido aqui: sem isso um
-  // baseUrl "javascript:..." viraria um link executável que o operador é
+  // O esquema já é validado no servidor (PutConfig rejeita o que não for
+  // http/https), então esta checagem é defesa em profundidade: cobre config
+  // gravada por uma versão anterior da tela ou direto no banco, e evita que um
+  // baseUrl "javascript:..." vire um link executável que o operador é
   // convidado a clicar.
   function inboxUrl(inboxId) {
     const base = (chatwootConfig.baseUrl || '').trim();
@@ -1490,9 +1491,11 @@
       '/inbox/' + encodeURIComponent(inboxId);
   }
 
-  // O PUT exige os três campos, então sem token digitado não dá para salvar.
+  // Salvar não exige redigitar o token: com config já salva, token em branco
+  // significa "mantenha o que está no servidor" (o PUT trata assim). Só na
+  // primeira configuração o campo é obrigatório — aí não há nada para manter.
   function syncSaveEnabled() {
-    saveConfigBtn.disabled = apiTokenInput.value.trim() === '';
+    saveConfigBtn.disabled = !chatwootConfig.configured && apiTokenInput.value.trim() === '';
   }
 
   apiTokenInput.addEventListener('input', syncSaveEnabled);
@@ -1511,6 +1514,9 @@
     document.getElementById('cfg-api-token').placeholder = cfg.apiTokenMasked || 'Token de acesso da API';
     chatwootConfig = cfg;
     setConfigBadge(cfg.configured);
+    // Depende de chatwootConfig.configured: com config salva, o Salvar fica
+    // habilitado mesmo sem token digitado.
+    syncSaveEnabled();
     return cfg;
   }
 
@@ -1539,8 +1545,17 @@
       apiToken: apiTokenInput.value.trim(),
       accountId: accountIdInput.value.trim(),
     };
-    if (!body.baseUrl || !body.apiToken || !body.accountId) {
-      toast('Preencha URL, token de API e ID da conta.', 'error');
+    if (!body.baseUrl || !body.accountId) {
+      toast('Preencha a URL do Chatwoot e o ID da conta.', 'error');
+      return;
+    }
+    if (!/^https?:\/\//i.test(body.baseUrl)) {
+      toast('A URL do Chatwoot precisa começar com http:// ou https://.', 'error');
+      return;
+    }
+    // Token em branco = manter o salvo. Só é bloqueio na primeira configuração.
+    if (!body.apiToken && !chatwootConfig.configured) {
+      toast('Informe o token de API na primeira configuração.', 'error');
       return;
     }
     setLoading(saveConfigBtn, true);

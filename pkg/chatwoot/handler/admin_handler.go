@@ -3,6 +3,7 @@ package chatwoot_handler
 import (
 	"errors"
 	"net/http"
+	"net/url"
 
 	chatwoot_service "github.com/evolution-foundation/evolution-go/pkg/chatwoot/service"
 	chatwoot_ui "github.com/evolution-foundation/evolution-go/pkg/chatwoot/ui"
@@ -31,11 +32,25 @@ func (h *AdminHandler) PutConfig(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if body.BaseURL == "" || body.APIToken == "" || body.AccountID == "" {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "baseUrl, apiToken e accountId são obrigatórios"})
+	if body.BaseURL == "" || body.AccountID == "" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "baseUrl e accountId são obrigatórios"})
 		return
 	}
+	// O esquema é validado aqui, não só na tela: o baseUrl volta para o
+	// navegador e vira o href do "Abrir no Chatwoot". Sem esta checagem um
+	// "javascript:..." salvo no banco convidava o operador a clicar nele.
+	parsed, err := url.Parse(body.BaseURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "baseUrl precisa ser uma URL http:// ou https:// completa"})
+		return
+	}
+	// apiToken vazio = manter o que já está salvo (ver SaveConfig). Só é erro
+	// de uso quando não existe config nenhuma para manter.
 	if err := h.service.SaveConfig(body.BaseURL, body.APIToken, body.AccountID); err != nil {
+		if errors.Is(err, chatwoot_service.ErrAPITokenRequired) {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

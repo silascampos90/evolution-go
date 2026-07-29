@@ -26,6 +26,11 @@ var ErrLinkAlreadyExists = errors.New("conexão já existe")
 // uso esperado, não falha — o handler o mapeia para 404.
 var ErrLinkNotFound = errors.New("conexão não encontrada")
 
+// ErrAPITokenRequired indica que o PUT da config veio sem apiToken e não há
+// nenhum token salvo para manter. Erro de uso esperado — o handler o mapeia
+// para 400.
+var ErrAPITokenRequired = errors.New("apiToken é obrigatório na primeira configuração")
+
 // instanceManager é o subconjunto de instance_service.InstanceService usado por
 // este service. Definido localmente (idioma Go "accept interfaces, return
 // structs") para que os testes não precisem fakear a interface inteira.
@@ -62,7 +67,23 @@ func NewChatwootService(
 	return &ChatwootService{configRepo, instanceRepo, instanceSvc, selfBaseURL, clientName, loggerWrapper}
 }
 
+// SaveConfig grava a config do Chatwoot. Um apiToken vazio significa "mantenha
+// o token já salvo": o token nunca volta em claro para a tela (só mascarado),
+// então exigi-lo em todo PUT obrigava o operador a redigitá-lo para mudar só o
+// ID da conta — e um clique fora do drawer descartava um token digitado que não
+// dá para recuperar do servidor. Sem config salva ainda não há o que manter, e
+// aí o token continua obrigatório (ErrAPITokenRequired).
 func (s *ChatwootService) SaveConfig(baseURL, apiToken, accountID string) error {
+	if apiToken == "" {
+		current, err := s.configRepo.Get()
+		if err != nil {
+			return err
+		}
+		if current == nil || current.APIToken == "" {
+			return ErrAPITokenRequired
+		}
+		apiToken = current.APIToken
+	}
 	return s.configRepo.Save(&chatwoot_model.ChatwootConfig{BaseURL: baseURL, APIToken: apiToken, AccountID: accountID})
 }
 
