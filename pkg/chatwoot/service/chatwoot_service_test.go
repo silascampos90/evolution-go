@@ -15,6 +15,7 @@ import (
 	instance_service "github.com/evolution-foundation/evolution-go/pkg/instance/service"
 	event_types "github.com/evolution-foundation/evolution-go/pkg/internal/event_types"
 	logger_wrapper "github.com/evolution-foundation/evolution-go/pkg/logger"
+	"gorm.io/gorm"
 )
 
 // fakeConfigRepo implementa chatwoot_repository.ChatwootConfigRepository.
@@ -29,6 +30,7 @@ func (f *fakeConfigRepo) Save(c *chatwoot_model.ChatwootConfig) error  { f.cfg =
 type fakeInstanceRepo struct {
 	byClient map[string][]*instance_model.Instance
 	byName   map[string]*instance_model.Instance
+	getErr   error // se != nil, GetInstanceByName devolve este erro em vez do lookup normal
 	updated  *instance_model.Instance
 }
 
@@ -43,13 +45,16 @@ func (f *fakeInstanceRepo) GetAll(clientName string) ([]*instance_model.Instance
 	return f.byClient[clientName], nil
 }
 
-// GetInstanceByName espelha o repositório real, que devolve erro quando não acha
-// (gorm.ErrRecordNotFound).
+// GetInstanceByName espelha o repositório real, que devolve gorm.ErrRecordNotFound
+// quando não acha (e pode ser configurado para simular outros erros de banco).
 func (f *fakeInstanceRepo) GetInstanceByName(name string) (*instance_model.Instance, error) {
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
 	if inst, ok := f.byName[name]; ok {
 		return inst, nil
 	}
-	return nil, errors.New("record not found")
+	return nil, gorm.ErrRecordNotFound
 }
 
 func (f *fakeInstanceRepo) Update(instance *instance_model.Instance) error {
@@ -208,6 +213,28 @@ func TestCreateLink_ExistingInstanceDoesNotTouchChatwoot(t *testing.T) {
 	_, err := svc.CreateLink("vendas")
 	if err == nil {
 		t.Fatal("expected CreateLink to fail when the instance already exists")
+	}
+	if len(rec.calls) != 0 {
+		t.Fatalf("expected zero Chatwoot calls, got %v", rec.calls)
+	}
+}
+
+// Fail closed: um erro de banco diferente de "não encontrado" ao checar o nome
+// não pode deixar a execução prosseguir para o Chatwoot. Antes da correção o
+// guard só checava err == nil, então uma falha de conexão era tratada como
+// "nome livre" e a inbox era criada antes de sabermos se o nome era válido.
+func TestCreateLink_DatabaseErrorDuringNameCheckFailsClosed(t *testing.T) {
+	rec := &chatwootRecorder{}
+	srv := rec.server(t)
+
+	cfgRepo := &fakeConfigRepo{cfg: &chatwoot_model.ChatwootConfig{BaseURL: srv.URL, APIToken: "t", AccountID: "1"}}
+	instRepo := newFakeInstanceRepo()
+	instRepo.getErr = errors.New("connection refused")
+
+	svc := NewChatwootService(cfgRepo, instRepo, newFakeInstanceService(), "http://evolution-go:8080", "evolution", newTestLogger(t))
+	_, err := svc.CreateLink("vendas")
+	if err == nil {
+		t.Fatal("expected CreateLink to fail when the name check errors")
 	}
 	if len(rec.calls) != 0 {
 		t.Fatalf("expected zero Chatwoot calls, got %v", rec.calls)

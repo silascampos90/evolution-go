@@ -3,6 +3,7 @@ package chatwoot_service
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 
 	chatwoot_client "github.com/evolution-foundation/evolution-go/pkg/chatwoot/client"
@@ -12,6 +13,7 @@ import (
 	instance_service "github.com/evolution-foundation/evolution-go/pkg/instance/service"
 	event_types "github.com/evolution-foundation/evolution-go/pkg/internal/event_types"
 	logger_wrapper "github.com/evolution-foundation/evolution-go/pkg/logger"
+	"gorm.io/gorm"
 )
 
 // instanceManager é o subconjunto de instance_service.InstanceService usado por
@@ -106,7 +108,15 @@ func (s *ChatwootService) CreateLink(name string) (*CreateLinkResult, error) {
 	// Valida o conflito de nome ANTES de tocar no Chatwoot. A ordem importa:
 	// instanceSvc.Create rejeita nome repetido, e criar a inbox primeiro fazia
 	// cada tentativa de reconexão abandonar uma inbox órfã no Chatwoot.
-	if existing, err := s.instanceRepo.GetInstanceByName(name); err == nil && existing != nil {
+	//
+	// Um erro de banco diferente de "não encontrado" precisa interromper aqui
+	// (fail closed): se deixássemos passar, a inbox seria criada no Chatwoot
+	// antes do nome ter sido validado de fato.
+	existing, err := s.instanceRepo.GetInstanceByName(name)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("verificar nome da instância: %w", err)
+	}
+	if existing != nil {
 		return nil, fmt.Errorf("já existe uma conexão chamada %q; use Reconectar em vez de criar outra", name)
 	}
 
