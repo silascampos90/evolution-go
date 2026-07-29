@@ -1732,7 +1732,9 @@ function showPairingMessage(text) {
 function showPasskeyStage(stage, openUrl, code) {
   const img = document.getElementById('pairing-qr');
   img.classList.remove('show');
-  img.src = '';
+  // removeAttribute, não src = '': a string vazia resolve para a URL do
+  // documento em Chromium/WebKit, e a página do admin é re-baixada como imagem.
+  img.removeAttribute('src');
   document.getElementById('passkey-code').textContent = code || '';
   const link = document.getElementById('passkey-open');
   link.href = openUrl || '#';
@@ -1747,6 +1749,10 @@ O `<a id="passkey-open">` usa `target="_blank" rel="noopener"`.
 - [ ] **Step 3: Contador de expiração**
 
 Exibir um contador regressivo de 120 s alimentado por `PAIRING_TIMEOUT_MS`. Ao zerar, parar os timers, esconder o QR e mostrar o botão "Gerar novo QR", que reinicia o loop com o mesmo token — sem chamar nenhum endpoint de criação.
+
+**O timeout NÃO se aplica ao estágio de passkey.** A cerimônia WebAuthn envolve abrir o WhatsApp Web, autenticar em outro aparelho e achar o prompt do código — passa de dois minutos com facilidade. Expirar ali apagaria o código de verificação da tela **enquanto o operador o digita**, e mataria o poll de status, de modo que uma cerimônia bem-sucedida nunca seria percebida. Além disso, "Gerar novo QR" é copy sobre um artefato que não existe nesse estágio. Quando `pairingCtx` está em passkey: manter o código visível e o poll de status vivo, e não exibir o contador.
+
+Guarda de obsolescência: o token sozinho **não** basta. `PAIRING_TIMEOUT_MS` (120000) é múltiplo exato de `QR_REFRESH_MS` (20000), então o 6º refresh de QR e o último tick do contador disparam no mesmo instante e a ordem é sorteio. Se o refresh vencer, ele fica em `await` por um RTT, o contador zera e expira a sessão, e a resposta atrasada repinta um QR novinho e escaneável com todos os timers mortos — o operador escaneia e nada acontece. Use um `pairingEpoch` monotônico: incremente em `startPairingLoop()`, `expirePairing()` e no teardown, capture antes de cada `await` e compare depois. Isso também cobre fechar/reabrir com o mesmo token e o retry.
 
 - [ ] **Step 4: Fechar o modal com segurança**
 
