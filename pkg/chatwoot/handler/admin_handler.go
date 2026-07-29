@@ -92,7 +92,14 @@ func (h *AdminHandler) PostReconnect(ctx *gin.Context) {
 	name := ctx.Param("instance")
 	res, err := h.service.ReconnectLink(name)
 	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		// Mesma forma do PostLink: "não existe" é 404, o resto é 500. Mapear
+		// tudo para 400 fazia um Chatwoot fora do ar parecer erro de digitação
+		// do operador para qualquer alerta baseado em log.
+		if errors.Is(err, chatwoot_service.ErrLinkNotFound) {
+			ctx.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	ctx.JSON(http.StatusOK, gin.H{"data": res})
@@ -100,9 +107,16 @@ func (h *AdminHandler) PostReconnect(ctx *gin.Context) {
 
 func (h *AdminHandler) DeleteLink(ctx *gin.Context) {
 	name := ctx.Param("instance")
+	// Comparação estrita de propósito: apagar a inbox destrói o histórico de
+	// conversas, então só o literal "true" opta por isso. Ausente, "", "false",
+	// "1" e "TRUE" preservam a inbox.
 	deleteInbox := ctx.Query("deleteInbox") == "true"
 	if err := h.service.DeleteLink(name, deleteInbox); err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		if errors.Is(err, chatwoot_service.ErrLinkNotFound) {
+			ctx.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	ctx.JSON(http.StatusOK, gin.H{"status": "deleted"})

@@ -22,6 +22,10 @@ import (
 // o handler o mapeia para 409.
 var ErrLinkAlreadyExists = errors.New("conexão já existe")
 
+// ErrLinkNotFound indica que não existe conexão com o nome pedido. É erro de
+// uso esperado, não falha — o handler o mapeia para 404.
+var ErrLinkNotFound = errors.New("conexão não encontrada")
+
 // instanceManager é o subconjunto de instance_service.InstanceService usado por
 // este service. Definido localmente (idioma Go "accept interfaces, return
 // structs") para que os testes não precisem fakear a interface inteira.
@@ -220,7 +224,7 @@ func (s *ChatwootService) ReconnectLink(name string) (*ReconnectResult, error) {
 		return nil, fmt.Errorf("buscar instância: %w", err)
 	}
 	if instance == nil {
-		return nil, fmt.Errorf("conexão %q não encontrada", name)
+		return nil, fmt.Errorf("%w: %q", ErrLinkNotFound, name)
 	}
 	if !instance.ChatwootEnabled || instance.ChatwootInboxID == "" {
 		return nil, fmt.Errorf("a instância %q não está vinculada a uma inbox do Chatwoot", name)
@@ -295,9 +299,14 @@ func (s *ChatwootService) DeleteLink(name string, deleteInbox bool) error {
 		return fmt.Errorf("buscar instância: %w", err)
 	}
 	if instance == nil {
-		return fmt.Errorf("conexão %q não encontrada", name)
+		return fmt.Errorf("%w: %q", ErrLinkNotFound, name)
 	}
 
+	// Ordem deliberada: a inbox é apagada no Chatwoot ANTES de o desvínculo ser
+	// gravado. Se o Update falhar depois, sobra um vínculo apontando para uma
+	// inbox que já não existe — o operador vê o cartão e tenta remover de novo,
+	// o que é recuperável. Gravar primeiro apagaria o id da inbox do banco e a
+	// inbox órfã ficaria sem nenhuma forma de ser removida pela tela.
 	if deleteInbox && instance.ChatwootInboxID != "" {
 		cfg, err := s.configRepo.Get()
 		if err != nil {
