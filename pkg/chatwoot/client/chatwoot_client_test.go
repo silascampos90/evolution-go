@@ -300,3 +300,57 @@ func TestUpdateMessageStatus(t *testing.T) {
 		t.Fatalf("bad request: %s %s status=%s", gotMethod, gotPath, gotStatus)
 	}
 }
+
+func TestFindInboxByNameReturnsApiInbox(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/accounts/1/inboxes" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"payload": []map[string]any{
+				{"id": 7, "name": "vendas", "channel_type": "Channel::WebWidget"},
+				{
+					"id": 42, "name": "vendas", "channel_type": "Channel::Api",
+					"inbox_identifier": "abc123", "secret": "s3cr3t",
+					"webhook_url": "http://evolution-go:8080/chatwoot/webhook/vendas",
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "tok", "1")
+	inbox, err := c.FindInboxByName("vendas")
+	if err != nil {
+		t.Fatalf("FindInboxByName: %v", err)
+	}
+	if inbox == nil {
+		t.Fatal("expected to find the Channel::Api inbox, got nil")
+	}
+	if inbox.ID != 42 || inbox.Secret != "s3cr3t" || inbox.Identifier != "abc123" {
+		t.Fatalf("bad inbox: %+v", inbox)
+	}
+	if inbox.WebhookURL != "http://evolution-go:8080/chatwoot/webhook/vendas" {
+		t.Fatalf("bad webhook url: %q", inbox.WebhookURL)
+	}
+}
+
+func TestFindInboxByNameReturnsNilWhenAbsent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"payload": []map[string]any{
+				{"id": 7, "name": "suporte", "channel_type": "Channel::Api"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "tok", "1")
+	inbox, err := c.FindInboxByName("vendas")
+	if err != nil {
+		t.Fatalf("FindInboxByName: %v", err)
+	}
+	if inbox != nil {
+		t.Fatalf("expected nil for missing inbox, got %+v", inbox)
+	}
+}

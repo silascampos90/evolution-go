@@ -32,6 +32,8 @@ type Inbox struct {
 	ID         int
 	Identifier string
 	Secret     string
+	Name       string
+	WebhookURL string
 }
 type Contact struct{ ID int }
 type Conversation struct{ ID int }
@@ -92,6 +94,41 @@ func (c *Client) CreateInbox(name, webhookURL string) (*Inbox, error) {
 		return nil, err
 	}
 	return &Inbox{ID: raw.ID, Identifier: raw.Identifier, Secret: raw.Secret}, nil
+}
+
+// FindInboxByName procura uma inbox do tipo Channel::Api pelo nome exato.
+// Retorna (nil, nil) quando não existe — ausência não é erro.
+//
+// O secret e o inbox_identifier só aparecem no payload quando o api_access_token
+// pertence a um administrador da conta (ver _inbox.json.jbuilder no Chatwoot).
+// É por isso que reusar uma inbox existente consegue recuperar o segredo do HMAC.
+func (c *Client) FindInboxByName(name string) (*Inbox, error) {
+	var raw struct {
+		Payload []struct {
+			ID          int    `json:"id"`
+			Name        string `json:"name"`
+			ChannelType string `json:"channel_type"`
+			Identifier  string `json:"inbox_identifier"`
+			Secret      string `json:"secret"`
+			WebhookURL  string `json:"webhook_url"`
+		} `json:"payload"`
+	}
+	if err := c.do(http.MethodGet, "/inboxes", nil, &raw); err != nil {
+		return nil, err
+	}
+	for _, in := range raw.Payload {
+		if in.ChannelType != "Channel::Api" || in.Name != name {
+			continue
+		}
+		return &Inbox{
+			ID:         in.ID,
+			Identifier: in.Identifier,
+			Secret:     in.Secret,
+			Name:       in.Name,
+			WebhookURL: in.WebhookURL,
+		}, nil
+	}
+	return nil, nil
 }
 
 // FindOrCreateContact cria um contato e o contact_inbox com source_id.
