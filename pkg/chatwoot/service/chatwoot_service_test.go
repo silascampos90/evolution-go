@@ -352,3 +352,94 @@ func TestReconnectLink_DatabaseErrorDuringNameCheckFailsClosed(t *testing.T) {
 		t.Fatalf("expected error NOT to contain 'não encontrada', got: %v", err)
 	}
 }
+
+func TestGetConfig_MasksToken(t *testing.T) {
+	cfgRepo := &fakeConfigRepo{cfg: &chatwoot_model.ChatwootConfig{
+		BaseURL: "https://chat.example", APIToken: "abcdefghijklmnop", AccountID: "1",
+	}}
+	svc := NewChatwootService(cfgRepo, newFakeInstanceRepo(), newFakeInstanceService(), "http://evolution-go:8080", "evolution", newTestLogger(t))
+
+	view, err := svc.GetConfig()
+	if err != nil {
+		t.Fatalf("GetConfig: %v", err)
+	}
+	if !view.Configured || view.BaseURL != "https://chat.example" || view.AccountID != "1" {
+		t.Fatalf("unexpected view: %+v", view)
+	}
+	if strings.Contains(view.APITokenMasked, "abcdefghijklmnop") {
+		t.Fatalf("token leaked in the masked view: %q", view.APITokenMasked)
+	}
+	if !strings.HasSuffix(view.APITokenMasked, "mnop") {
+		t.Fatalf("expected the last 4 chars to be shown, got %q", view.APITokenMasked)
+	}
+}
+
+func TestGetConfig_NotConfigured(t *testing.T) {
+	svc := NewChatwootService(&fakeConfigRepo{}, newFakeInstanceRepo(), newFakeInstanceService(), "http://evolution-go:8080", "evolution", newTestLogger(t))
+	view, err := svc.GetConfig()
+	if err != nil {
+		t.Fatalf("GetConfig: %v", err)
+	}
+	if view.Configured {
+		t.Fatalf("expected Configured=false, got %+v", view)
+	}
+}
+
+func TestListLinks_ExposesInstanceToken(t *testing.T) {
+	instRepo := newFakeInstanceRepo()
+	instRepo.byClient["evolution"] = []*instance_model.Instance{
+		{Id: "inst-1", Name: "vendas", Token: "vendas-abc", ChatwootEnabled: true, ChatwootInboxID: "42"},
+	}
+	svc := NewChatwootService(&fakeConfigRepo{}, instRepo, newFakeInstanceService(), "http://evolution-go:8080", "evolution", newTestLogger(t))
+
+	links, err := svc.ListLinks()
+	if err != nil {
+		t.Fatalf("ListLinks: %v", err)
+	}
+	if links[0].InstanceToken != "vendas-abc" || links[0].InstanceID != "inst-1" {
+		t.Fatalf("expected instance id and token in the view, got %+v", links[0])
+	}
+}
+
+func TestDeleteLink_ClearsFieldsAndOptionallyDeletesInbox(t *testing.T) {
+	rec := &chatwootRecorder{}
+	srv := rec.server(t)
+
+	cfgRepo := &fakeConfigRepo{cfg: &chatwoot_model.ChatwootConfig{BaseURL: srv.URL, APIToken: "t", AccountID: "1"}}
+	instRepo := newFakeInstanceRepo()
+	instRepo.byName["vendas"] = &instance_model.Instance{
+		Id: "inst-1", Name: "vendas", ChatwootEnabled: true, ChatwootInboxID: "42",
+		ChatwootInboxIdentifier: "abc", ChatwootWebhookSecret: "sek",
+	}
+
+	svc := NewChatwootService(cfgRepo, instRepo, newFakeInstanceService(), "http://evolution-go:8080", "evolution", newTestLogger(t))
+	if err := svc.DeleteLink("vendas", false); err != nil {
+		t.Fatalf("DeleteLink: %v", err)
+	}
+	saved := instRepo.updated
+	if saved.ChatwootEnabled || saved.ChatwootInboxID != "" || saved.ChatwootWebhookSecret != "" {
+		t.Fatalf("expected chatwoot fields cleared, got %+v", saved)
+	}
+	if rec.called("DELETE") {
+		t.Fatalf("expected the inbox to be kept, calls were %v", rec.calls)
+	}
+}
+
+func TestDeleteLink_DeletesInboxWhenAsked(t *testing.T) {
+	rec := &chatwootRecorder{}
+	srv := rec.server(t)
+
+	cfgRepo := &fakeConfigRepo{cfg: &chatwoot_model.ChatwootConfig{BaseURL: srv.URL, APIToken: "t", AccountID: "1"}}
+	instRepo := newFakeInstanceRepo()
+	instRepo.byName["vendas"] = &instance_model.Instance{
+		Id: "inst-1", Name: "vendas", ChatwootEnabled: true, ChatwootInboxID: "42",
+	}
+
+	svc := NewChatwootService(cfgRepo, instRepo, newFakeInstanceService(), "http://evolution-go:8080", "evolution", newTestLogger(t))
+	if err := svc.DeleteLink("vendas", true); err != nil {
+		t.Fatalf("DeleteLink: %v", err)
+	}
+	if !rec.called("DELETE /api/v1/accounts/1/inboxes/42") {
+		t.Fatalf("expected the inbox to be deleted, calls were %v", rec.calls)
+	}
+}

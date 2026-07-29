@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 
 	chatwoot_client "github.com/evolution-foundation/evolution-go/pkg/chatwoot/client"
 	chatwoot_model "github.com/evolution-foundation/evolution-go/pkg/chatwoot/model"
@@ -68,12 +69,14 @@ func (s *ChatwootService) TestConfig() error {
 }
 
 type LinkView struct {
-	InstanceName string `json:"instanceName"`
-	Number       string `json:"number"`
-	InboxID      string `json:"inboxId"`
-	InboxName    string `json:"inboxName"`
-	Connected    bool   `json:"connected"`
-	Enabled      bool   `json:"enabled"`
+	InstanceName  string `json:"instanceName"`
+	InstanceID    string `json:"instanceId"`
+	InstanceToken string `json:"instanceToken"`
+	Number        string `json:"number"`
+	InboxID       string `json:"inboxId"`
+	InboxName     string `json:"inboxName"`
+	Connected     bool   `json:"connected"`
+	Enabled       bool   `json:"enabled"`
 }
 
 func (s *ChatwootService) ListLinks() ([]LinkView, error) {
@@ -86,13 +89,18 @@ func (s *ChatwootService) ListLinks() ([]LinkView, error) {
 		if !inst.ChatwootEnabled {
 			continue
 		}
+		// O token da instância vai no payload para a tela conseguir chamar
+		// /instance/qr, /instance/status e /instance/logout sem recriar nada.
+		// A rota é admin-only (GLOBAL_API_KEY), o mesmo nível de segredo.
 		views = append(views, LinkView{
-			InstanceName: inst.Name,
-			Number:       inst.Jid,
-			InboxID:      inst.ChatwootInboxID,
-			InboxName:    inst.Name,
-			Connected:    inst.Connected,
-			Enabled:      inst.ChatwootEnabled,
+			InstanceName:  inst.Name,
+			InstanceID:    inst.Id,
+			InstanceToken: inst.Token,
+			Number:        inst.Jid,
+			InboxID:       inst.ChatwootInboxID,
+			InboxName:     inst.Name,
+			Connected:     inst.Connected,
+			Enabled:       inst.ChatwootEnabled,
 		})
 	}
 	return views, nil
@@ -226,6 +234,91 @@ func (s *ChatwootService) ReconnectLink(name string) (*ReconnectResult, error) {
 		InstanceToken: instance.Token,
 		InboxID:       instance.ChatwootInboxID,
 	}, nil
+}
+
+type ConfigView struct {
+	BaseURL        string `json:"baseUrl"`
+	AccountID      string `json:"accountId"`
+	APITokenMasked string `json:"apiTokenMasked"`
+	Configured     bool   `json:"configured"`
+}
+
+// GetConfig devolve a config para a tela reidratar o formulário. O token nunca
+// é reexposto — só os 4 últimos caracteres, para o operador reconhecer qual é.
+func (s *ChatwootService) GetConfig() (*ConfigView, error) {
+	cfg, err := s.configRepo.Get()
+	if err != nil {
+		return nil, err
+	}
+	if cfg == nil {
+		return &ConfigView{}, nil
+	}
+	return &ConfigView{
+		BaseURL:        cfg.BaseURL,
+		AccountID:      cfg.AccountID,
+		APITokenMasked: maskToken(cfg.APIToken),
+		Configured:     true,
+	}, nil
+}
+
+// maskToken mostra apenas os 4 últimos caracteres. Tokens curtos (<= 4) são
+// mascarados por inteiro.
+func maskToken(token string) string {
+	if len(token) <= 4 {
+		return strings.Repeat("•", len(token))
+	}
+	return strings.Repeat("•", 8) + token[len(token)-4:]
+}
+
+// DeleteLink desfaz o vínculo entre a instância e a inbox. A instância em si
+// não é removida — para isso existe DELETE /instance/delete/:instanceId.
+//
+// deleteInbox apaga também a inbox no Chatwoot, o que destrói o histórico de
+// conversas dela. Só é feito por pedido explícito do operador.
+func (s *ChatwootService) DeleteLink(name string, deleteInbox bool) error {
+	// Mesma disciplina do CreateLink e do ReconnectLink: erro real de banco não
+	// pode se disfarçar de "não encontrada".
+	instance, err := s.instanceRepo.GetInstanceByName(name)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return fmt.Errorf("buscar instância: %w", err)
+	}
+	if instance == nil {
+		return fmt.Errorf("conexão %q não encontrada", name)
+	}
+
+	if deleteInbox && instance.ChatwootInboxID != "" {
+		cfg, err := s.configRepo.Get()
+		if err != nil {
+			return err
+		}
+		if cfg == nil {
+			return fmt.Errorf("config do chatwoot ausente")
+		}
+		client := chatwoot_client.NewClient(cfg.BaseURL, cfg.APIToken, cfg.AccountID)
+		if err := client.DeleteInbox(atoiSafe(instance.ChatwootInboxID)); err != nil {
+			return fmt.Errorf("remover inbox: %w", err)
+		}
+	}
+
+	instance.ChatwootEnabled = false
+	instance.ChatwootInboxID = ""
+	instance.ChatwootInboxIdentifier = ""
+	instance.ChatwootWebhookSecret = ""
+	return s.instanceRepo.Update(instance)
+}
+
+// atoiSafe converte o id da inbox guardado como string; devolve 0 em qualquer
+// caractere não numérico, o que faz a chamada ao Chatwoot falhar de forma
+// visível em vez de acertar uma inbox errada.
+func atoiSafe(s string) int {
+	n := 0
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return 0
+		}
+		n = n*10 + int(r-'0')
+	}
+	return n
 }
 
 // randToken gera um sufixo curto (8 hex chars) usado para compor o token da
