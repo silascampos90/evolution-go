@@ -162,6 +162,12 @@ func TestListLinks_FiltersByClientName(t *testing.T) {
 type chatwootRecorder struct {
 	calls        []string
 	existingName string // se != "", GET /inboxes devolve uma inbox Channel::Api com esse nome
+	// webhook_url da inbox existente. Vazio = o webhook já correto (aquele que
+	// o service montaria), que é o caso em que NÃO deve haver PATCH.
+	existingWebhook string
+	// Simula o token de API que não é de administrador da conta: o Chatwoot
+	// omite "secret" (e o identifier) do payload do GET /inboxes.
+	omitSecret bool
 }
 
 func (rec *chatwootRecorder) server(t *testing.T) *httptest.Server {
@@ -172,10 +178,18 @@ func (rec *chatwootRecorder) server(t *testing.T) *httptest.Server {
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/inboxes"):
 			payload := []map[string]any{}
 			if rec.existingName != "" {
+				webhook := rec.existingWebhook
+				if webhook == "" {
+					webhook = "http://evolution-go:8080/chatwoot/webhook/" + rec.existingName
+				}
+				secret := "s3cr3t"
+				if rec.omitSecret {
+					secret = ""
+				}
 				payload = append(payload, map[string]any{
 					"id": 42, "name": rec.existingName, "channel_type": "Channel::Api",
-					"inbox_identifier": "abc123", "secret": "s3cr3t",
-					"webhook_url": "http://evolution-go:8080/chatwoot/webhook/" + rec.existingName,
+					"inbox_identifier": "abc123", "secret": secret,
+					"webhook_url": webhook,
 				})
 			}
 			json.NewEncoder(w).Encode(map[string]any{"payload": payload})
@@ -265,6 +279,72 @@ func TestCreateLink_ReusesExistingInbox(t *testing.T) {
 	}
 	if instRepo.updated.ChatwootWebhookSecret != "s3cr3t" {
 		t.Fatalf("expected the secret recovered from the existing inbox, got %q", instRepo.updated.ChatwootWebhookSecret)
+	}
+}
+
+// Caminho real de recuperação: a inbox órfã existe, mas o webhook dela aponta
+// para uma URL antiga do evolution-go (mudou de host, de porta ou de nome).
+// Reusar sem corrigir deixaria o Chatwoot entregando as respostas do agente
+// para um endereço morto — a ponte fica só de ida, sem erro visível.
+func TestCreateLink_RepairsStaleWebhookOnReusedInbox(t *testing.T) {
+	rec := &chatwootRecorder{
+		existingName:    "vendas",
+		existingWebhook: "http://evolution-antigo:8080/chatwoot/webhook/vendas",
+	}
+	srv := rec.server(t)
+
+	cfgRepo := &fakeConfigRepo{cfg: &chatwoot_model.ChatwootConfig{BaseURL: srv.URL, APIToken: "t", AccountID: "1"}}
+	instRepo := newFakeInstanceRepo()
+
+	svc := NewChatwootService(cfgRepo, instRepo, newFakeInstanceService(), "http://evolution-go:8080", "evolution", newTestLogger(t))
+	if _, err := svc.CreateLink("vendas"); err != nil {
+		t.Fatalf("CreateLink: %v", err)
+	}
+	if !rec.called("PATCH /api/v1/accounts/1/inboxes/42") {
+		t.Fatalf("expected the stale webhook to be repaired with a PATCH, calls were %v", rec.calls)
+	}
+}
+
+// O inverso do teste acima: com o webhook já correto não há PATCH nenhum.
+func TestCreateLink_DoesNotPatchWebhookWhenAlreadyCorrect(t *testing.T) {
+	rec := &chatwootRecorder{existingName: "vendas"}
+	srv := rec.server(t)
+
+	cfgRepo := &fakeConfigRepo{cfg: &chatwoot_model.ChatwootConfig{BaseURL: srv.URL, APIToken: "t", AccountID: "1"}}
+
+	svc := NewChatwootService(cfgRepo, newFakeInstanceRepo(), newFakeInstanceService(), "http://evolution-go:8080", "evolution", newTestLogger(t))
+	if _, err := svc.CreateLink("vendas"); err != nil {
+		t.Fatalf("CreateLink: %v", err)
+	}
+	if rec.called("PATCH") {
+		t.Fatalf("expected no webhook repair, calls were %v", rec.calls)
+	}
+}
+
+// Token de API que não é de administrador: o Chatwoot não devolve o secret da
+// inbox existente. Sem secret o webhook_handler rejeita toda resposta de agente
+// (fail closed), então CreateLink não pode retornar 200 e deixar o operador com
+// uma ponte só de ida e um cartão verde. A inbox reusada não é nossa: não apagar.
+func TestCreateLink_RejectsReusedInboxWithoutSecret(t *testing.T) {
+	rec := &chatwootRecorder{existingName: "vendas", omitSecret: true}
+	srv := rec.server(t)
+
+	cfgRepo := &fakeConfigRepo{cfg: &chatwoot_model.ChatwootConfig{BaseURL: srv.URL, APIToken: "t", AccountID: "1"}}
+	instRepo := newFakeInstanceRepo()
+
+	svc := NewChatwootService(cfgRepo, instRepo, newFakeInstanceService(), "http://evolution-go:8080", "evolution", newTestLogger(t))
+	_, err := svc.CreateLink("vendas")
+	if err == nil {
+		t.Fatal("expected CreateLink to fail when the reused inbox has no webhook secret")
+	}
+	if !strings.Contains(err.Error(), "administrador") {
+		t.Fatalf("expected the error to name the admin-token requirement, got: %v", err)
+	}
+	if rec.called("DELETE") {
+		t.Fatalf("expected the reused inbox to be kept (it is not ours), calls were %v", rec.calls)
+	}
+	if instRepo.updated != nil {
+		t.Fatalf("expected no link to be persisted, got %+v", instRepo.updated)
 	}
 }
 
@@ -460,5 +540,73 @@ func TestDeleteLink_DeletesInboxWhenAsked(t *testing.T) {
 	}
 	if !rec.called("DELETE /api/v1/accounts/1/inboxes/42") {
 		t.Fatalf("expected the inbox to be deleted, calls were %v", rec.calls)
+	}
+}
+
+// Fail closed, como em CreateLink e ReconnectLink: um erro de banco diferente de
+// "não encontrado" não pode virar "conexão não encontrada" (nem 404 no handler).
+func TestDeleteLink_DatabaseErrorDuringLookupFailsClosed(t *testing.T) {
+	instRepo := newFakeInstanceRepo()
+	instRepo.getErr = errors.New("connection refused")
+
+	svc := NewChatwootService(&fakeConfigRepo{}, instRepo, newFakeInstanceService(), "http://evolution-go:8080", "evolution", newTestLogger(t))
+	err := svc.DeleteLink("qualquer", true)
+	if err == nil {
+		t.Fatal("expected DeleteLink to fail when the lookup errors")
+	}
+	if !strings.Contains(err.Error(), "connection refused") {
+		t.Fatalf("expected error to contain the underlying cause, got: %v", err)
+	}
+	if errors.Is(err, ErrLinkNotFound) {
+		t.Fatalf("expected the error NOT to be ErrLinkNotFound (that maps to 404), got: %v", err)
+	}
+	if instRepo.updated != nil {
+		t.Fatalf("expected nothing to be persisted, got %+v", instRepo.updated)
+	}
+}
+
+// A ausência de conexão precisa ser reconhecível pelo handler (→ 404) nos dois
+// métodos que a reportam.
+func TestLinkNotFoundIsSentinel(t *testing.T) {
+	svc := NewChatwootService(&fakeConfigRepo{}, newFakeInstanceRepo(), newFakeInstanceService(), "http://evolution-go:8080", "evolution", newTestLogger(t))
+
+	if _, err := svc.ReconnectLink("inexistente"); !errors.Is(err, ErrLinkNotFound) {
+		t.Fatalf("ReconnectLink: expected ErrLinkNotFound, got %v", err)
+	}
+	if err := svc.DeleteLink("inexistente", false); !errors.Is(err, ErrLinkNotFound) {
+		t.Fatalf("DeleteLink: expected ErrLinkNotFound, got %v", err)
+	}
+}
+
+// Um apiToken vazio no PUT significa "mantenha o token salvo": o operador não
+// consegue redigitar o que a tela nunca mostra em claro.
+func TestSaveConfig_KeepsStoredTokenWhenOmitted(t *testing.T) {
+	cfgRepo := &fakeConfigRepo{cfg: &chatwoot_model.ChatwootConfig{
+		BaseURL: "https://antigo.example", APIToken: "token-secreto", AccountID: "1",
+	}}
+	svc := NewChatwootService(cfgRepo, newFakeInstanceRepo(), newFakeInstanceService(), "http://evolution-go:8080", "evolution", newTestLogger(t))
+
+	if err := svc.SaveConfig("https://novo.example", "", "7"); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+	if cfgRepo.cfg.APIToken != "token-secreto" {
+		t.Fatalf("expected the stored token to be kept, got %q", cfgRepo.cfg.APIToken)
+	}
+	if cfgRepo.cfg.BaseURL != "https://novo.example" || cfgRepo.cfg.AccountID != "7" {
+		t.Fatalf("expected the other fields to be updated, got %+v", cfgRepo.cfg)
+	}
+}
+
+// Sem config salva não há token para manter — o campo continua obrigatório.
+func TestSaveConfig_RequiresTokenOnFirstConfig(t *testing.T) {
+	cfgRepo := &fakeConfigRepo{}
+	svc := NewChatwootService(cfgRepo, newFakeInstanceRepo(), newFakeInstanceService(), "http://evolution-go:8080", "evolution", newTestLogger(t))
+
+	err := svc.SaveConfig("https://novo.example", "", "1")
+	if !errors.Is(err, ErrAPITokenRequired) {
+		t.Fatalf("expected ErrAPITokenRequired, got %v", err)
+	}
+	if cfgRepo.cfg != nil {
+		t.Fatalf("expected nothing to be saved, got %+v", cfgRepo.cfg)
 	}
 }
