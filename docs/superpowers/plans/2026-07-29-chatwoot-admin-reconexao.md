@@ -1465,23 +1465,74 @@ document.getElementById('cards').addEventListener('click', async (ev) => {
 
 *Encerrar sessão* chama `DELETE /instance/logout` com o header `apikey: <instanceToken>` — **nunca** `POST /instance/disconnect`, que zera `instance.Events` e deixa a ponte muda sem sinal visível na tela.
 
-*Remover* abre um diálogo de confirmação que exige digitar o nome da conexão, com um checkbox *"apagar também a inbox no Chatwoot"* desmarcado por padrão:
+*Remover* abre um **modal próprio** (nunca `window.prompt`/`window.confirm`, que destoariam do resto da tela e não permitem um checkbox de verdade), estilizado com os mesmos tokens da Task 8. O modal exige digitar o nome da conexão e traz um checkbox *"apagar também a inbox no Chatwoot"* desmarcado por padrão.
+
+Markup:
+
+```html
+<div class="modal-backdrop" id="remove-modal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="remove-title">
+    <h2 id="remove-title">Remover vínculo</h2>
+    <p>Digite <strong id="remove-name"></strong> para confirmar:</p>
+    <input type="text" id="remove-confirm-input" autocomplete="off">
+    <label class="checkbox">
+      <input type="checkbox" id="remove-delete-inbox">
+      <span>Apagar também a inbox <span id="remove-inbox-label"></span> no Chatwoot — isso destrói o histórico de conversas dela.</span>
+    </label>
+    <div class="modal-actions">
+      <button class="ghost" id="remove-cancel">Cancelar</button>
+      <button class="danger" id="remove-submit" disabled>Remover</button>
+    </div>
+  </div>
+</div>
+```
+
+Comportamento:
 
 ```js
-async function confirmRemove(link) {
-  const typed = window.prompt('Digite "' + link.instanceName + '" para confirmar a remoção do vínculo:');
-  if (typed !== link.instanceName) return;
-  const alsoInbox = window.confirm('Apagar TAMBÉM a inbox #' + link.inboxId + ' no Chatwoot?\n\nIsso destrói o histórico de conversas dela. Cancele para manter a inbox.');
-  const qs = alsoInbox ? '?deleteInbox=true' : '';
-  const { ok, data } = await apiFetch('/chatwoot/links/' + encodeURIComponent(link.instanceName) + qs, { method: 'DELETE' });
+let removeTarget = null;
+
+function openRemoveModal(link) {
+  removeTarget = link;
+  document.getElementById('remove-name').textContent = link.instanceName;
+  document.getElementById('remove-inbox-label').textContent = '#' + link.inboxId;
+  const input = document.getElementById('remove-confirm-input');
+  input.value = '';
+  document.getElementById('remove-delete-inbox').checked = false;
+  document.getElementById('remove-submit').disabled = true;
+  document.getElementById('remove-modal').classList.add('open');
+  input.focus();
+}
+
+// O botão só habilita quando o nome digitado bate exatamente.
+document.getElementById('remove-confirm-input').addEventListener('input', (ev) => {
+  document.getElementById('remove-submit').disabled =
+    !removeTarget || ev.target.value !== removeTarget.instanceName;
+});
+
+document.getElementById('remove-submit').addEventListener('click', async () => {
+  if (!removeTarget) return;
+  const qs = document.getElementById('remove-delete-inbox').checked ? '?deleteInbox=true' : '';
+  const { ok, data } = await apiFetch(
+    '/chatwoot/links/' + encodeURIComponent(removeTarget.instanceName) + qs,
+    { method: 'DELETE' }
+  );
+  closeRemoveModal();
   if (!ok) {
     toast((data && data.error) || 'Falha ao remover', 'error');
     return;
   }
   toast('Vínculo removido', 'ok');
   loadLinks();
+});
+
+function closeRemoveModal() {
+  removeTarget = null;
+  document.getElementById('remove-modal').classList.remove('open');
 }
 ```
+
+`closeRemoveModal` é ligada ao botão Cancelar, à tecla `Esc` e ao clique no backdrop.
 
 - [ ] **Step 4: Skeleton e auto-refresh**
 
