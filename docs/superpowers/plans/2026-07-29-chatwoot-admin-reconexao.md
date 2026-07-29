@@ -669,7 +669,16 @@ func (s *ChatwootService) CreateLink(name string) (*CreateLinkResult, error) {
 	// Valida o conflito de nome ANTES de tocar no Chatwoot. A ordem importa:
 	// instanceSvc.Create rejeita nome repetido, e criar a inbox primeiro fazia
 	// cada tentativa de reconexão abandonar uma inbox órfã no Chatwoot.
-	if existing, err := s.instanceRepo.GetInstanceByName(name); err == nil && existing != nil {
+	//
+	// "não encontrado" precisa ser distinguido de uma falha real do banco: com
+	// `err == nil && existing != nil` o guard falharia ABERTO num outage, e o
+	// código seguiria criando inbox no Chatwoot sem ter validado o nome — a
+	// mesma classe de falha que esta função existe para eliminar.
+	existing, err := s.instanceRepo.GetInstanceByName(name)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("verificar nome da instância: %w", err)
+	}
+	if existing != nil {
 		return nil, fmt.Errorf("já existe uma conexão chamada %q; use Reconectar em vez de criar outra", name)
 	}
 
@@ -1132,7 +1141,7 @@ func atoiSafe(s string) int {
 }
 ```
 
-Adicionar `"strings"` aos imports de `chatwoot_service.go`.
+Adicionar `"errors"`, `"strings"` e `"gorm.io/gorm"` aos imports de `chatwoot_service.go`.
 
 - [ ] **Step 5: Rodar os testes e confirmar que passam**
 
