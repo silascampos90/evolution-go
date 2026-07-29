@@ -18,9 +18,12 @@ func Register(eng *gin.Engine, admin *chatwoot_handler.AdminHandler, webhook *ch
 	api := eng.Group("/chatwoot")
 	api.Use(adminAuth)
 	{
+		api.GET("/config", admin.GetConfig)
 		api.PUT("/config", admin.PutConfig)
 		api.POST("/config/test", admin.TestConfig)
 		api.GET("/links", admin.GetLinks)
 		api.POST("/links", admin.PostLink)
+		api.POST("/links/:instance/reconnect", admin.PostReconnect)
+		api.DELETE("/links/:instance", admin.DeleteLink)
 	}
 }

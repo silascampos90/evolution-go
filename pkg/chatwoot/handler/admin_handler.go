@@ -1,6 +1,7 @@
 package chatwoot_handler
 
 import (
+	"errors"
 	"net/http"
 
 	chatwoot_service "github.com/evolution-foundation/evolution-go/pkg/chatwoot/service"
@@ -68,8 +69,41 @@ func (h *AdminHandler) PostLink(ctx *gin.Context) {
 	}
 	res, err := h.service.CreateLink(body.Name)
 	if err != nil {
+		if errors.Is(err, chatwoot_service.ErrLinkAlreadyExists) {
+			ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	ctx.JSON(http.StatusOK, gin.H{"data": res})
+}
+
+func (h *AdminHandler) GetConfig(ctx *gin.Context) {
+	view, err := h.service.GetConfig()
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": view})
+}
+
+func (h *AdminHandler) PostReconnect(ctx *gin.Context) {
+	name := ctx.Param("instance")
+	res, err := h.service.ReconnectLink(name)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": res})
+}
+
+func (h *AdminHandler) DeleteLink(ctx *gin.Context) {
+	name := ctx.Param("instance")
+	deleteInbox := ctx.Query("deleteInbox") == "true"
+	if err := h.service.DeleteLink(name, deleteInbox); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"status": "deleted"})
 }

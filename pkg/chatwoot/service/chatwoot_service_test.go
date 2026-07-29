@@ -214,6 +214,9 @@ func TestCreateLink_ExistingInstanceDoesNotTouchChatwoot(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected CreateLink to fail when the instance already exists")
 	}
+	if !errors.Is(err, ErrLinkAlreadyExists) {
+		t.Fatalf("expected errors.Is(err, ErrLinkAlreadyExists), got %v", err)
+	}
 	if len(rec.calls) != 0 {
 		t.Fatalf("expected zero Chatwoot calls, got %v", rec.calls)
 	}

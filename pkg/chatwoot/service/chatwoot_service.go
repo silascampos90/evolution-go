@@ -17,6 +17,11 @@ import (
 	"gorm.io/gorm"
 )
 
+// ErrLinkAlreadyExists indica que já existe uma instância com o nome pedido.
+// É um erro de uso esperado (o operador deveria reconectar), não uma falha —
+// o handler o mapeia para 409.
+var ErrLinkAlreadyExists = errors.New("conexão já existe")
+
 // instanceManager é o subconjunto de instance_service.InstanceService usado por
 // este service. Definido localmente (idioma Go "accept interfaces, return
 // structs") para que os testes não precisem fakear a interface inteira.
@@ -125,7 +130,7 @@ func (s *ChatwootService) CreateLink(name string) (*CreateLinkResult, error) {
 		return nil, fmt.Errorf("verificar nome da instância: %w", err)
 	}
 	if existing != nil {
-		return nil, fmt.Errorf("já existe uma conexão chamada %q; use Reconectar em vez de criar outra", name)
+		return nil, fmt.Errorf("%w: %q; use Reconectar em vez de criar outra", ErrLinkAlreadyExists, name)
 	}
 
 	cfg, err := s.configRepo.Get()
