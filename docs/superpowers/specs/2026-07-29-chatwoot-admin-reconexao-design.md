@@ -45,7 +45,11 @@ Duas descobertas que condicionam o desenho do "reconectar":
 - **`Connect` sobrescreve configuração.** `pkg/instance/service/instance_service.go:232-236` atribui `instance.Events`, `Webhook`, `RabbitmqEnable`, `NatsEnable` e `WebSocketEnable` a partir do corpo da requisição. Com `Subscribe` vazio ele assume só `MESSAGE` (`:214-215`), derrubando o `READ_RECEIPT` que o `CreateLink` configurou em `chatwoot_service.go:130` — o sync de status de mensagem pararia de funcionar silenciosamente.
 - **`Disconnect` zera os eventos.** `instance_service.go:322` faz `instance.Events = ""`, o que mata a ponte até que alguém reconecte.
 
-Conclusão: `ReconnectLink` sempre passa `Subscribe` explícito (`MESSAGE`, `READ_RECEIPT`) e preserva `instance.Webhook`. Isso também cura uma instância que ficou com `Events` vazio após um disconnect.
+Conclusão: `ReconnectLink` precisa preservar **os cinco** campos que `Connect` sobrescreve, não só dois. São eles: `Subscribe` explícito (`MESSAGE`, `READ_RECEIPT`), `WebhookUrl: instance.Webhook`, `RabbitmqEnable`, `NatsEnable` e `WebSocketEnable`, cada um relido da instância. Isso também cura uma instância que ficou com `Events` vazio após um disconnect.
+
+Os três últimos são `string`, então o valor zero é `""`, e o consumo em `whatsmeow.go:2287,2296,2305` compara com `"enabled"`/`"true"`. Passar vazio **persiste** a desativação (o `Connect` chama `Update` em `:239`), e o efeito é invisível: o operador tem uma instância ligada ao Chatwoot **e** publicando em RabbitMQ, clica em Reconectar, o Chatwoot volta a funcionar e a fila silencia para sempre — sem erro, sem toast, sem log.
+
+Quando uma spec documenta uma armadilha como lista, a mitigação tem que ser escrita como checklist contra essa mesma lista. A primeira versão desta seção enumerou os cinco campos e a conclusão carregou dois.
 
 ## Parte 1 — Backend
 
