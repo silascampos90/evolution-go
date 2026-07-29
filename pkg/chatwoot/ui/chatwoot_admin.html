@@ -9,7 +9,10 @@
   // Tema aplicado antes da primeira pintura para não piscar em claro ao recarregar.
   function applyTheme(mode) {
     document.documentElement.classList.toggle('dark', mode === 'dark');
-    localStorage.setItem('evo_theme', mode);
+    // try/catch como na leitura abaixo: em contexto com storage bloqueado
+    // (modo privado com política restritiva, iframe de terceiro) o setItem
+    // lança, e sem isto o clique no tema deixaria de aplicar a classe.
+    try { localStorage.setItem('evo_theme', mode); } catch (e) { /* sem persistência */ }
   }
   (function () {
     var saved = null;
@@ -281,6 +284,9 @@
     font-weight: 500;
     white-space: nowrap;
     cursor: pointer;
+    /* .btn também veste <a> ("Abrir no Chatwoot", "Abrir WhatsApp Web"), e sem
+       isto o rótulo sai sublinhado dentro do botão. */
+    text-decoration: none;
     transition: background-color 160ms var(--ease), border-color 160ms var(--ease), color 160ms var(--ease);
   }
 
@@ -449,12 +455,14 @@
     border-color: var(--border);
   }
 
-  /* Conexão sem sessão pareada — mesmo par de cores do neutro, nome próprio
-     para não confundir com o "Não configurado" do cabeçalho. */
+  /* Conexão pareada mas desconectada — o único estado do cartão que exige ação
+     do operador (clicar em Reconectar), então não pode ser o badge mais apagado
+     da tela. Peso próprio nos tokens de destrutivo, mais forte que o .warn de
+     "Aguardando pareamento" (que é passo esperado de um fluxo em andamento). */
   .badge.off {
-    color: var(--muted-foreground-strong);
-    background: var(--muted);
-    border-color: var(--border);
+    color: var(--destructive-text);
+    background: color-mix(in oklab, var(--destructive) 12%, var(--card));
+    border-color: color-mix(in oklab, var(--destructive) 28%, var(--card));
   }
 
   /* ---------------------------------------------------------------------- */
@@ -873,6 +881,9 @@
     background: var(--muted-foreground);
   }
 
+  /* .info é o kind padrão de toast() — declarado explicitamente para não ficar
+     dependendo só do valor do .toast::before genérico. */
+  .toast.info::before { background: var(--muted-foreground); }
   .toast.ok::before { background: var(--primary); }
   .toast.error::before { background: var(--destructive); }
 
@@ -1192,11 +1203,19 @@
   const API_KEY_STORAGE = 'evo_apikey';
 
   const apikeyInput = document.getElementById('apikey');
-  apikeyInput.value = localStorage.getItem(API_KEY_STORAGE) || '';
+  // localStorage lança em contexto com storage bloqueado, e isto roda no topo
+  // do script: sem try/catch a exceção mataria o resto do arquivo inteiro —
+  // nenhum listener registrado, tela morta. O script do <head> já se protege
+  // assim; aqui a tela apenas passa a não lembrar a apikey entre recargas.
+  try {
+    apikeyInput.value = localStorage.getItem(API_KEY_STORAGE) || '';
+  } catch (e) {
+    apikeyInput.value = '';
+  }
 
   let apikeyDebounce = null;
   apikeyInput.addEventListener('input', () => {
-    localStorage.setItem(API_KEY_STORAGE, apikeyInput.value);
+    try { localStorage.setItem(API_KEY_STORAGE, apikeyInput.value); } catch (e) { /* sem persistência */ }
     // Assim que a apikey muda, a tela se recarrega sozinha — sem pedir F5.
     clearTimeout(apikeyDebounce);
     apikeyDebounce = setTimeout(refreshAll, 600);
@@ -1261,7 +1280,10 @@
   }
 
   function displayNumber(number) {
-    if (!number) return 'aguardando pareamento';
+    // Não repete "aguardando pareamento": esse é o texto do badge de status,
+    // que fica dois elementos acima no mesmo cartão. Aqui a linha é a
+    // identificação do número, então ela diz só que não há número ainda.
+    if (!number) return 'número não pareado';
     const at = number.indexOf('@');
     return at === -1 ? number : number.slice(0, at);
   }
@@ -1956,7 +1978,12 @@
   }
 
   function showPairingMessage(text) {
-    pairingMessageEl.textContent = text || '';
+    const next = text || '';
+    // A região é aria-live="polite": reatribuir o MESMO texto (o refresh do QR
+    // reescreve "Escaneie o QR…" a cada 20s) faz o leitor de tela reanunciar a
+    // frase durante todo o pareamento. Só escreve quando muda de fato.
+    if (pairingMessageEl.textContent === next) return;
+    pairingMessageEl.textContent = next;
   }
 
   // A conta exige passkey WebAuthn: não há QR neste estágio, só um código de
@@ -2039,14 +2066,24 @@
   }
 
   function startPairingLoop() {
+    // Entra sempre limpando os timers anteriores: a função é chamada tanto ao
+    // abrir o modal quanto no "Gerar novo QR", e nada garante que o ciclo
+    // anterior já parou. Fecha também um furo de ordem — updatePairingCountdown()
+    // roda de forma síncrona logo abaixo e, se o prazo já estivesse vencido,
+    // chamaria expirePairing() ANTES de pairingTimers.timeout ser atribuído; o
+    // setInterval da linha seguinte ressuscitaria um timer que acabou de morrer.
+    stopPairingLoop();
     pairingEpoch++;
     const token = pairingCtx.instanceToken;
     refreshPairingQr(token);
     pairingTimers.qr = setInterval(() => refreshPairingQr(token), QR_REFRESH_MS);
     pairingTimers.status = setInterval(() => pollPairingStatus(token), STATUS_POLL_MS);
     pairingDeadline = Date.now() + PAIRING_TIMEOUT_MS;
-    updatePairingCountdown();
+    // Timer instalado ANTES da primeira chamada síncrona: se ela expirasse, o
+    // expirePairing() dentro dela precisa ter o que limpar — na ordem inversa o
+    // setInterval instalaria depois um timer que ninguém mais para.
     pairingTimers.timeout = setInterval(updatePairingCountdown, 1000);
+    updatePairingCountdown();
   }
 
   // Único callback de teardown do modal, registrado em openDialog() e
