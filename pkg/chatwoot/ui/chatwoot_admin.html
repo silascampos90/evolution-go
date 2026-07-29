@@ -500,21 +500,20 @@
     color: var(--muted-foreground);
   }
 
+  /* flex-wrap, não truncar: .btn é inline-flex, e text-overflow não tem
+     efeito num item de flex (o texto vira um item de flex anônimo, não uma
+     caixa de bloco) — o "Abrir no Chatwoot" só cortaria sem reticências, e
+     de forma simétrica por causa do justify-content:center do .btn, comendo
+     letra do início e do fim. Em vez disso, deixa empilhar em duas linhas
+     quando o espaço aperta; nunca cria rolagem horizontal. */
   .card-actions {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
     margin-top: 14px;
   }
 
-  /* min-width:0 permite o flex encolher abaixo do texto; sem isso o rótulo
-     mais longo ("Abrir no Chatwoot") empurraria o cartão e criaria rolagem
-     horizontal em telas estreitas. */
-  .card-actions .btn {
-    flex: 1 1 0;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
+  .card-actions .btn { flex: 1 1 140px; }
 
   /* Menu "⋯" — âncora relativa só no wrapper, para não interferir no
      space-between do cabeçalho do cartão. */
@@ -1604,24 +1603,33 @@
 
   let linksLoadedOnce = false;
 
-  async function loadLinks() {
+  // `silent`: usado pelo poll de fundo. Uma falha ali não pode limpar a tela
+  // nem empilhar toast a cada 15s — sem isso, uma apikey ruim ou uma queda
+  // passageira do servidor vira um loop de erro sem fim e sem saída. No modo
+  // silencioso uma falha simplesmente mantém os cards como estavam.
+  async function loadLinks(silent) {
     if (!linksLoadedOnce) {
       renderSkeleton();
       linksLoadedOnce = true;
     }
     const { ok, status, data } = await apiFetch('/chatwoot/links');
     if (!ok || !data) {
-      cardsEl.innerHTML = '';
-      toast('Não carregou as conexões: ' + apiError(status, data), 'error');
+      if (!silent) {
+        cardsEl.innerHTML = '';
+        toast('Não carregou as conexões: ' + apiError(status, data), 'error');
+      }
       return;
     }
     renderCards(data.data || []);
   }
 
   // Revalida em segundo plano, sem skeleton, para o status não envelhecer na
-  // tela. Sem apikey a chamada só voltaria 401 — nem tenta.
+  // tela. Sem apikey a chamada só voltaria 401 — nem tenta. Com um diálogo
+  // aberto (ex.: o modal de remoção) o tick é pulado inteiro: re-renderizar
+  // os cards por baixo trocaria o botão que tem o foco e a máquina de diálogo
+  // perderia a referência de para onde devolver o foco ao fechar.
   setInterval(() => {
-    if (getApiKey()) loadLinks();
+    if (getApiKey() && !activeDialog) loadLinks(true);
   }, 15000);
 
   document.getElementById('reload-links').addEventListener('click', refreshAll);
