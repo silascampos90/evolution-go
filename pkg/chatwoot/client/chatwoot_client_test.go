@@ -133,16 +133,16 @@ func TestFindOpenConversationReturnsOpenOne(t *testing.T) {
 		}
 		json.NewEncoder(w).Encode(map[string]any{
 			"payload": []map[string]any{
-				{"id": 10, "status": "resolved"},
-				{"id": 45, "status": "open"},
-				{"id": 99, "status": "open"},
+				{"id": 10, "inbox_id": 42, "status": "resolved"},
+				{"id": 45, "inbox_id": 42, "status": "open"},
+				{"id": 99, "inbox_id": 42, "status": "open"},
 			},
 		})
 	}))
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "tok", "1")
-	convID, ok, err := c.FindOpenConversation(123)
+	convID, ok, err := c.FindOpenConversation(123, 42)
 	if err != nil {
 		t.Fatalf("FindOpenConversation: %v", err)
 	}
@@ -155,19 +155,67 @@ func TestFindOpenConversationReturnsFalseWhenNoneOpen(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"payload": []map[string]any{
-				{"id": 10, "status": "resolved"},
+				{"id": 10, "inbox_id": 42, "status": "resolved"},
 			},
 		})
 	}))
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "tok", "1")
-	convID, ok, err := c.FindOpenConversation(123)
+	convID, ok, err := c.FindOpenConversation(123, 42)
 	if err != nil {
 		t.Fatalf("FindOpenConversation: %v", err)
 	}
 	if ok || convID != 0 {
 		t.Fatalf("expected no open conversation, got convID=%d ok=%v", convID, ok)
+	}
+}
+
+func TestFindOpenConversationIgnoresOtherInboxes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/accounts/1/contacts/123/conversations" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"payload": []map[string]any{
+				{"id": 900, "inbox_id": 99, "status": "open"},
+				{"id": 901, "inbox_id": 42, "status": "resolved"},
+				{"id": 902, "inbox_id": 42, "status": "open"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "tok", "1")
+	id, ok, err := c.FindOpenConversation(123, 42)
+	if err != nil {
+		t.Fatalf("FindOpenConversation: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected to find an open conversation in inbox 42")
+	}
+	if id != 902 {
+		t.Fatalf("expected conversation 902 (inbox 42, open), got %d", id)
+	}
+}
+
+func TestFindOpenConversationReturnsFalseWhenOnlyOtherInboxHasOpen(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"payload": []map[string]any{
+				{"id": 900, "inbox_id": 99, "status": "open"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "tok", "1")
+	_, ok, err := c.FindOpenConversation(123, 42)
+	if err != nil {
+		t.Fatalf("FindOpenConversation: %v", err)
+	}
+	if ok {
+		t.Fatal("expected no match: the only open conversation belongs to another inbox")
 	}
 }
 
@@ -298,5 +346,99 @@ func TestUpdateMessageStatus(t *testing.T) {
 	}
 	if gotMethod != http.MethodPut || gotPath != "/api/v1/accounts/1/conversations/2/messages/11" || gotStatus != "delivered" {
 		t.Fatalf("bad request: %s %s status=%s", gotMethod, gotPath, gotStatus)
+	}
+}
+
+func TestFindInboxByNameReturnsApiInbox(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/accounts/1/inboxes" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"payload": []map[string]any{
+				{"id": 7, "name": "vendas", "channel_type": "Channel::WebWidget"},
+				{
+					"id": 42, "name": "vendas", "channel_type": "Channel::Api",
+					"inbox_identifier": "abc123", "secret": "s3cr3t",
+					"webhook_url": "http://evolution-go:8080/chatwoot/webhook/vendas",
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "tok", "1")
+	inbox, err := c.FindInboxByName("vendas")
+	if err != nil {
+		t.Fatalf("FindInboxByName: %v", err)
+	}
+	if inbox == nil {
+		t.Fatal("expected to find the Channel::Api inbox, got nil")
+	}
+	if inbox.ID != 42 || inbox.Secret != "s3cr3t" || inbox.Identifier != "abc123" {
+		t.Fatalf("bad inbox: %+v", inbox)
+	}
+	if inbox.WebhookURL != "http://evolution-go:8080/chatwoot/webhook/vendas" {
+		t.Fatalf("bad webhook url: %q", inbox.WebhookURL)
+	}
+}
+
+func TestFindInboxByNameReturnsNilWhenAbsent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"payload": []map[string]any{
+				{"id": 7, "name": "suporte", "channel_type": "Channel::Api"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "tok", "1")
+	inbox, err := c.FindInboxByName("vendas")
+	if err != nil {
+		t.Fatalf("FindInboxByName: %v", err)
+	}
+	if inbox != nil {
+		t.Fatalf("expected nil for missing inbox, got %+v", inbox)
+	}
+}
+
+func TestUpdateInboxWebhookSendsChannelPayload(t *testing.T) {
+	var got map[string]any
+	var method, path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, path = r.Method, r.URL.Path
+		json.NewDecoder(r.Body).Decode(&got)
+		json.NewEncoder(w).Encode(map[string]any{"id": 42})
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "tok", "1")
+	if err := c.UpdateInboxWebhook(42, "http://evolution-go:8080/chatwoot/webhook/vendas"); err != nil {
+		t.Fatalf("UpdateInboxWebhook: %v", err)
+	}
+	if method != http.MethodPatch || path != "/api/v1/accounts/1/inboxes/42" {
+		t.Fatalf("unexpected request: %s %s", method, path)
+	}
+	channel, ok := got["channel"].(map[string]any)
+	if !ok || channel["webhook_url"] != "http://evolution-go:8080/chatwoot/webhook/vendas" {
+		t.Fatalf("bad body: %+v", got)
+	}
+}
+
+func TestDeleteInboxIssuesDelete(t *testing.T) {
+	var method, path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, path = r.Method, r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "tok", "1")
+	if err := c.DeleteInbox(42); err != nil {
+		t.Fatalf("DeleteInbox: %v", err)
+	}
+	if method != http.MethodDelete || path != "/api/v1/accounts/1/inboxes/42" {
+		t.Fatalf("unexpected request: %s %s", method, path)
 	}
 }

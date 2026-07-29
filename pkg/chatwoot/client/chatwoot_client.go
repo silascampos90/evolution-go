@@ -32,6 +32,8 @@ type Inbox struct {
 	ID         int
 	Identifier string
 	Secret     string
+	Name       string
+	WebhookURL string
 }
 type Contact struct{ ID int }
 type Conversation struct{ ID int }
@@ -92,6 +94,59 @@ func (c *Client) CreateInbox(name, webhookURL string) (*Inbox, error) {
 		return nil, err
 	}
 	return &Inbox{ID: raw.ID, Identifier: raw.Identifier, Secret: raw.Secret}, nil
+}
+
+// FindInboxByName procura uma inbox do tipo Channel::Api pelo nome exato.
+// Retorna (nil, nil) quando não existe — ausência não é erro.
+//
+// O secret e o inbox_identifier só aparecem no payload quando o api_access_token
+// pertence a um administrador da conta (ver _inbox.json.jbuilder no Chatwoot).
+// É por isso que reusar uma inbox existente consegue recuperar o segredo do HMAC.
+func (c *Client) FindInboxByName(name string) (*Inbox, error) {
+	var raw struct {
+		Payload []struct {
+			ID          int    `json:"id"`
+			Name        string `json:"name"`
+			ChannelType string `json:"channel_type"`
+			Identifier  string `json:"inbox_identifier"`
+			Secret      string `json:"secret"`
+			WebhookURL  string `json:"webhook_url"`
+		} `json:"payload"`
+	}
+	if err := c.do(http.MethodGet, "/inboxes", nil, &raw); err != nil {
+		return nil, err
+	}
+	for _, in := range raw.Payload {
+		if in.ChannelType != "Channel::Api" || in.Name != name {
+			continue
+		}
+		return &Inbox{
+			ID:         in.ID,
+			Identifier: in.Identifier,
+			Secret:     in.Secret,
+			Name:       in.Name,
+			WebhookURL: in.WebhookURL,
+		}, nil
+	}
+	return nil, nil
+}
+
+// UpdateInboxWebhook corrige o webhook_url de uma inbox Channel::Api existente.
+// Usado ao reusar uma inbox cujo webhook aponta para uma URL antiga do evolution-go.
+func (c *Client) UpdateInboxWebhook(inboxID int, webhookURL string) error {
+	body := map[string]any{
+		"channel": map[string]any{"webhook_url": webhookURL},
+	}
+	path := fmt.Sprintf("/inboxes/%d", inboxID)
+	return c.do(http.MethodPatch, path, body, nil)
+}
+
+// DeleteInbox remove uma inbox. Usado no rollback do CreateLink e na remoção
+// explícita de um vínculo. Apagar uma inbox destrói o histórico de conversas
+// dela no Chatwoot — só chame com intenção explícita do operador.
+func (c *Client) DeleteInbox(inboxID int) error {
+	path := fmt.Sprintf("/inboxes/%d", inboxID)
+	return c.do(http.MethodDelete, path, nil, nil)
 }
 
 // FindOrCreateContact cria um contato e o contact_inbox com source_id.
@@ -174,21 +229,27 @@ func (c *Client) FindContactByPhone(phone string) (*Contact, error) {
 }
 
 // FindOpenConversation retorna o display_id da primeira conversa com status
-// "open" do contato, se houver. O display_id é o mesmo valor usado em
+// "open" do contato **naquela inbox**. O display_id é o mesmo valor usado em
 // /conversations/{id}/messages, retornado por CreateConversation.
-func (c *Client) FindOpenConversation(contactID int) (int, bool, error) {
+//
+// O filtro por inbox é obrigatório: GET /contacts/{id}/conversations devolve
+// conversas de TODAS as inboxes da conta. Sem ele, uma mensagem que chega por
+// uma inbox seria injetada numa conversa de outra, e a resposta do agente
+// sairia pelo número de WhatsApp errado.
+func (c *Client) FindOpenConversation(contactID, inboxID int) (int, bool, error) {
 	path := fmt.Sprintf("/contacts/%d/conversations", contactID)
 	var raw struct {
 		Payload []struct {
-			ID     int    `json:"id"`
-			Status string `json:"status"`
+			ID      int    `json:"id"`
+			InboxID int    `json:"inbox_id"`
+			Status  string `json:"status"`
 		} `json:"payload"`
 	}
 	if err := c.do(http.MethodGet, path, nil, &raw); err != nil {
 		return 0, false, err
 	}
 	for _, conv := range raw.Payload {
-		if conv.Status == "open" {
+		if conv.Status == "open" && conv.InboxID == inboxID {
 			return conv.ID, true, nil
 		}
 	}

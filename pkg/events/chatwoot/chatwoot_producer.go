@@ -327,7 +327,7 @@ func (p *chatwootProducer) handle(payload []byte, userID string) {
 		}
 	}
 
-	convID, ok, err := client.FindOpenConversation(contact.ID)
+	convID, ok, err := client.FindOpenConversation(contact.ID, inboxID)
 	if err != nil {
 		log.LogError("[%s] chatwoot: falha ao buscar conversa: %v", userID, err)
 		return
