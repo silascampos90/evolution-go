@@ -284,3 +284,50 @@ func TestCreateLink_RollsBackInboxWhenInstanceCreationFails(t *testing.T) {
 		t.Fatalf("expected the orphan inbox to be deleted, calls were %v", rec.calls)
 	}
 }
+
+// Regressão da armadilha do Connect: ele sobrescreve instance.Events a partir
+// do corpo da requisição, e com Subscribe vazio reduz a assinatura a só
+// MESSAGE — o que mataria o sync de status (READ_RECEIPT). ReconnectLink
+// precisa passar os dois eventos explicitamente e preservar o webhook.
+func TestReconnectLink_PreservesEventsAndWebhook(t *testing.T) {
+	instRepo := newFakeInstanceRepo()
+	instRepo.byName["vendas"] = &instance_model.Instance{
+		Id:              "inst-1",
+		Name:            "vendas",
+		Token:           "vendas-abc",
+		Webhook:         "https://cliente.example/hook",
+		ChatwootEnabled: true,
+		ChatwootInboxID: "42",
+	}
+	instSvc := newFakeInstanceService()
+
+	svc := NewChatwootService(&fakeConfigRepo{}, instRepo, instSvc, "http://evolution-go:8080", "evolution", newTestLogger(t))
+	res, err := svc.ReconnectLink("vendas")
+	if err != nil {
+		t.Fatalf("ReconnectLink: %v", err)
+	}
+	if res.InstanceToken != "vendas-abc" || res.InboxID != "42" {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+	if instSvc.connectedTo == nil {
+		t.Fatal("expected Connect to be called")
+	}
+	subscribed := strings.Join(instSvc.connectedTo.Subscribe, ",")
+	want := event_types.MESSAGE + "," + event_types.READ_RECEIPT
+	if subscribed != want {
+		t.Fatalf("expected Subscribe %q, got %q", want, subscribed)
+	}
+	if instSvc.connectedTo.WebhookUrl != "https://cliente.example/hook" {
+		t.Fatalf("expected the existing webhook to be preserved, got %q", instSvc.connectedTo.WebhookUrl)
+	}
+}
+
+func TestReconnectLink_RejectsInstanceWithoutChatwootLink(t *testing.T) {
+	instRepo := newFakeInstanceRepo()
+	instRepo.byName["avulsa"] = &instance_model.Instance{Id: "inst-2", Name: "avulsa", ChatwootEnabled: false}
+
+	svc := NewChatwootService(&fakeConfigRepo{}, instRepo, newFakeInstanceService(), "http://evolution-go:8080", "evolution", newTestLogger(t))
+	if _, err := svc.ReconnectLink("avulsa"); err == nil {
+		t.Fatal("expected ReconnectLink to reject an instance that is not linked to Chatwoot")
+	}
+}

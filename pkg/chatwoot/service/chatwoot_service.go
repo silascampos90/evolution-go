@@ -184,6 +184,44 @@ func (s *ChatwootService) CreateLink(name string) (*CreateLinkResult, error) {
 	return &CreateLinkResult{InstanceID: created.Id, InstanceToken: token, InboxID: created.ChatwootInboxID}, nil
 }
 
+type ReconnectResult struct {
+	InstanceID    string `json:"instanceId"`
+	InstanceToken string `json:"instanceToken"`
+	InboxID       string `json:"inboxId"`
+}
+
+// ReconnectLink religa uma instância já vinculada, sem criar nada — nem inbox,
+// nem instância. É o caminho correto quando a sessão do WhatsApp cai.
+//
+// Passa Subscribe e WebhookUrl explicitamente porque instance_service.Connect
+// sobrescreve instance.Events e instance.Webhook a partir do que recebe: com
+// Subscribe vazio ele assumiria só MESSAGE, derrubando o READ_RECEIPT de que o
+// sync de status depende. Isso também cura uma instância que ficou com Events
+// vazio depois de um Disconnect.
+func (s *ChatwootService) ReconnectLink(name string) (*ReconnectResult, error) {
+	instance, err := s.instanceRepo.GetInstanceByName(name)
+	if err != nil || instance == nil {
+		return nil, fmt.Errorf("conexão %q não encontrada", name)
+	}
+	if !instance.ChatwootEnabled || instance.ChatwootInboxID == "" {
+		return nil, fmt.Errorf("a instância %q não está vinculada a uma inbox do Chatwoot", name)
+	}
+
+	_, _, _, err = s.instanceSvc.Connect(&instance_service.ConnectStruct{
+		Subscribe:  []string{event_types.MESSAGE, event_types.READ_RECEIPT},
+		WebhookUrl: instance.Webhook,
+	}, instance)
+	if err != nil {
+		return nil, fmt.Errorf("religar instância: %w", err)
+	}
+
+	return &ReconnectResult{
+		InstanceID:    instance.Id,
+		InstanceToken: instance.Token,
+		InboxID:       instance.ChatwootInboxID,
+	}, nil
+}
+
 // randToken gera um sufixo curto (8 hex chars) usado para compor o token da
 // instância auto-provisionada.
 func randToken() string {
