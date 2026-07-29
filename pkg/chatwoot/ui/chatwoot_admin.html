@@ -943,10 +943,16 @@
     }
   }
 
+  // Escapa também aspas: este helper é usado dentro de ATRIBUTOS (href, data-*,
+  // title), onde escapar só &<> deixa o atributo ser fechado e um handler
+  // injetado. textContent/innerHTML sozinho não cobre isso.
   function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
+    return String(str == null ? '' : str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   function displayNumber(number) {
@@ -1016,9 +1022,12 @@
   let dialogOpener = null;
 
   function openDialog(el) {
-    const opener = document.activeElement;
+    // Só captura o opener se nenhum diálogo estiver aberto: capturar antes de
+    // closeDialog() faria dialogOpener apontar para um elemento que acabou de
+    // virar inert, e o restore de foco em closeDialog() falharia em silêncio.
+    const opener = activeDialog ? null : document.activeElement;
     if (activeDialog) closeDialog();
-    dialogOpener = opener;
+    if (opener) dialogOpener = opener;
     activeDialog = el;
     el.removeAttribute('inert');
     el.classList.add('open');
@@ -1058,6 +1067,14 @@
     // Prende o Tab dentro do diálogo aberto.
     const items = Array.from(activeDialog.querySelectorAll(FOCUSABLE));
     if (items.length === 0) return;
+    // Focar um elemento e depois desabilitá-lo (setLoading) joga o foco no
+    // body, e aí a checagem de primeiro/último não pega nada — o Tab
+    // escaparia para o cabeçalho, que não é inert. Traz o foco de volta.
+    if (!activeDialog.contains(document.activeElement)) {
+      ev.preventDefault();
+      items[0].focus();
+      return;
+    }
     const first = items[0];
     const last = items[items.length - 1];
     if (ev.shiftKey && document.activeElement === first) {
@@ -1107,9 +1124,15 @@
   }
 
   // Link direto para a inbox no Chatwoot, montado a partir da config carregada.
+  //
+  // O baseUrl vem do banco e o backend só valida que não é vazio
+  // (admin_handler.go:34), então o esquema é conferido aqui: sem isso um
+  // baseUrl "javascript:..." viraria um link executável que o operador é
+  // convidado a clicar.
   function inboxUrl(inboxId) {
-    if (!chatwootConfig.baseUrl) return '#';
-    return chatwootConfig.baseUrl.replace(/\/$/, '') +
+    const base = (chatwootConfig.baseUrl || '').trim();
+    if (!/^https?:\/\//i.test(base)) return '#';
+    return base.replace(/\/$/, '') +
       '/app/accounts/' + encodeURIComponent(chatwootConfig.accountId) +
       '/inbox/' + encodeURIComponent(inboxId);
   }
@@ -1269,7 +1292,7 @@
       return;
     }
     closeDialog();
-    toast('Conexão “' + name + '” criada.', 'ok');
+    toast('Conexão “' + name + '” criada. Use Reconectar no cartão para parear o WhatsApp.', 'ok');
     // A Task 10 abre o modal de QR aqui, com data.data.
     await loadLinks();
   });
