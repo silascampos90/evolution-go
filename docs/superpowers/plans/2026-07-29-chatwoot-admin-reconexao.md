@@ -857,8 +857,14 @@ type ReconnectResult struct {
 // sync de status depende. Isso também cura uma instância que ficou com Events
 // vazio depois de um Disconnect.
 func (s *ChatwootService) ReconnectLink(name string) (*ReconnectResult, error) {
+	// Mesma disciplina do CreateLink: só "não encontrado" é ausência; qualquer
+	// outro erro do banco é propagado com a causa real, em vez de virar um
+	// enganoso "conexão não encontrada" na cara do operador.
 	instance, err := s.instanceRepo.GetInstanceByName(name)
-	if err != nil || instance == nil {
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("buscar instância: %w", err)
+	}
+	if instance == nil {
 		return nil, fmt.Errorf("conexão %q não encontrada", name)
 	}
 	if !instance.ChatwootEnabled || instance.ChatwootInboxID == "" {
@@ -1100,8 +1106,13 @@ func maskToken(token string) string {
 // deleteInbox apaga também a inbox no Chatwoot, o que destrói o histórico de
 // conversas dela. Só é feito por pedido explícito do operador.
 func (s *ChatwootService) DeleteLink(name string, deleteInbox bool) error {
+	// Mesma disciplina do CreateLink e do ReconnectLink: erro real de banco não
+	// pode se disfarçar de "não encontrada".
 	instance, err := s.instanceRepo.GetInstanceByName(name)
-	if err != nil || instance == nil {
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return fmt.Errorf("buscar instância: %w", err)
+	}
+	if instance == nil {
 		return fmt.Errorf("conexão %q não encontrada", name)
 	}
 
