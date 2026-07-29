@@ -1520,8 +1520,14 @@
         toast('Falha ao reconectar: ' + apiError(status, data), 'error');
         return;
       }
-      // A Task 10 implementa openQrModal; a chamada já fica pronta aqui.
-      openQrModal(data.data.instanceToken, name, data.data.inboxId);
+      // A Task 10 define openQrModal(). Até lá, degradamos com uma mensagem em vez
+      // de estourar um ReferenceError: a reconexão já aconteceu no servidor, o que
+      // falta é só a tela mostrar o QR.
+      if (typeof openQrModal === 'function') {
+        openQrModal(data.data.instanceToken, name, data.data.inboxId);
+      } else {
+        toast('Reconexão iniciada. Escaneie o QR pelo Manager para concluir o pareamento.', 'ok');
+      }
       return;
     }
 
