@@ -1346,8 +1346,14 @@
       return;
     }
     if (ev.key !== 'Tab') return;
-    // Prende o Tab dentro do diálogo aberto.
-    const items = Array.from(activeDialog.querySelectorAll(FOCUSABLE));
+    // Prende o Tab dentro do diálogo aberto. FOCUSABLE sozinho não basta: o
+    // modal de QR esconde alguns itens com style="display:none" (o link de
+    // passkey, o botão de retry) e eles continuam batendo no seletor —
+    // getClientRects() só devolve algo para o que está de fato renderizado,
+    // então filtra o que está fora da árvore de layout sem precisar de mais
+    // seletores por caso de uso.
+    const items = Array.from(activeDialog.querySelectorAll(FOCUSABLE))
+      .filter((el) => el.getClientRects().length > 0);
     if (items.length === 0) return;
     // Focar um elemento e depois desabilitá-lo (setLoading) joga o foco no
     // body, e aí a checagem de primeiro/último não pega nada — o Tab
@@ -1795,6 +1801,16 @@
   let pairingTimers = { qr: null, status: null, timeout: null };
   let pairingCtx = null;
   let pairingDeadline = null;
+  // Incrementado em todo início/fim de ciclo de pareamento — novo QR (abrir
+  // o modal ou "Gerar novo QR"), expiração ou fechamento do modal. Uma
+  // continuação assíncrona (refreshPairingQr/pollPairingStatus) captura o
+  // valor antes do await e confere depois: se mudou enquanto a resposta
+  // estava a caminho, ela pertence a um ciclo que não existe mais na tela —
+  // mesmo token de instância, mas QR ou timers que já não são os de agora.
+  // Só conferir pairingCtx.instanceToken não bastava: expirePairing() mantém
+  // pairingCtx vivo (o retry reusa o token), então a checagem por token
+  // continuava passando depois do QR expirar.
+  let pairingEpoch = 0;
 
   function stopPairingLoop() {
     if (pairingTimers.qr) clearInterval(pairingTimers.qr);
@@ -1828,7 +1844,10 @@
   // verificação e um link para concluir a cerimônia no WhatsApp Web.
   function showPasskeyStage(stage, openUrl, code) {
     pairingQrImg.classList.remove('show');
-    pairingQrImg.src = '';
+    // Não '': em Chromium/WebKit um <img src=""> é resolvido para a própria
+    // URL do documento, e o navegador refaz o request desta página como
+    // imagem. removeAttribute evita esse efeito colateral.
+    pairingQrImg.removeAttribute('src');
     passkeyCodeEl.textContent = code || '';
     passkeyOpenLink.href = openUrl || '#';
     passkeyOpenLink.style.display = openUrl ? 'inline-flex' : 'none';
@@ -1837,11 +1856,14 @@
   }
 
   async function refreshPairingQr(instanceToken) {
+    const epoch = pairingEpoch;
     const { ok, data } = await instanceFetch('/instance/qr', instanceToken);
-    // A resposta pode chegar depois que o modal já fechou ou reabriu para
-    // outra instância — sem esta checagem, uma resposta atrasada da
-    // instância anterior sobrescreveria o que já está na tela.
-    if (!pairingCtx || pairingCtx.instanceToken !== instanceToken) return;
+    // A resposta pode chegar depois que o ciclo atual já não existe mais —
+    // modal fechado, QR expirado (mesmo token, retry reusa) ou um "Gerar
+    // novo QR" que já pediu outro. pairingEpoch muda em cada um desses
+    // casos; conferir só o token não bastava porque expirePairing() mantém
+    // pairingCtx (e o token) vivo de propósito.
+    if (epoch !== pairingEpoch) return;
     const payload = (ok && data && data.data) || null;
 
     if (payload && payload.passkeyStage) {
@@ -1856,8 +1878,9 @@
   }
 
   async function pollPairingStatus(instanceToken) {
+    const epoch = pairingEpoch;
     const { ok, data } = await instanceFetch('/instance/status', instanceToken);
-    if (!pairingCtx || pairingCtx.instanceToken !== instanceToken) return;
+    if (epoch !== pairingEpoch) return;
     const payload = (ok && data && data.data) || null;
     // LoggedIn, não Connected: o socket pode estar Connected antes da sessão
     // do WhatsApp existir. LoggedIn é o sinal de que o QR (ou a passkey) foi
@@ -1871,6 +1894,14 @@
   }
 
   function updatePairingCountdown() {
+    // A cerimônia de passkey (abrir o WhatsApp Web, autenticar em outro
+    // aparelho, digitar o código) rotineiramente passa de 120s — os 120s
+    // valem só para o QR. Em estágio de passkey não expira: o código fica
+    // na tela e o poll de status continua vivo (timer separado, intacto).
+    if (passkeyBoxEl.classList.contains('open')) {
+      pairingCountdownEl.textContent = '';
+      return;
+    }
     const remainingMs = Math.max(0, pairingDeadline - Date.now());
     const remainingSec = Math.ceil(remainingMs / 1000);
     pairingCountdownEl.textContent = remainingMs > 0 ? ('QR expira em ' + remainingSec + 's') : '';
@@ -1878,9 +1909,10 @@
   }
 
   function expirePairing() {
+    pairingEpoch++;
     stopPairingLoop();
     pairingQrImg.classList.remove('show');
-    pairingQrImg.src = '';
+    pairingQrImg.removeAttribute('src');
     passkeyBoxEl.classList.remove('open');
     pairingCountdownEl.textContent = '';
     showPairingMessage('O QR expirou.');
@@ -1888,6 +1920,7 @@
   }
 
   function startPairingLoop() {
+    pairingEpoch++;
     const token = pairingCtx.instanceToken;
     refreshPairingQr(token);
     pairingTimers.qr = setInterval(() => refreshPairingQr(token), QR_REFRESH_MS);
@@ -1901,6 +1934,7 @@
   // disparado por closeDialog() em todo caminho de saída (botão, Esc,
   // backdrop, ou uma chamada direta a closeDialog() ao detectar conexão).
   function teardownQrModal() {
+    pairingEpoch++;
     stopPairingLoop();
     pairingCtx = null;
   }
@@ -1915,7 +1949,7 @@
     pairingCtx = { instanceToken: instanceToken, instanceName: instanceName, inboxId: inboxId };
     qrModalNameEl.textContent = instanceName;
     pairingQrImg.classList.remove('show');
-    pairingQrImg.src = '';
+    pairingQrImg.removeAttribute('src');
     passkeyBoxEl.classList.remove('open');
     pairingRetryBtn.style.display = 'none';
     pairingCountdownEl.textContent = '';
