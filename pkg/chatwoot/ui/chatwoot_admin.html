@@ -1004,8 +1004,12 @@
   </div>
 
   <!-- Lista de conexões, com reconectar, abrir no Chatwoot e o menu "⋯"
-       (encerrar sessão / remover). -->
-  <div class="cards" id="cards"></div>
+       (encerrar sessão / remover).
+       tabindex="-1": é o ponto de foco estável para onde closeDialog() e
+       renderCards() devolvem o foco quando o elemento que o tinha deixou de
+       existir (o cartão é recriado) ou de estar visível (item do menu "⋯").
+       Sem isso o foco cairia no <body> e o Tab voltaria ao topo da página. -->
+  <div class="cards" id="cards" tabindex="-1"></div>
 </main>
 
 <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
@@ -1077,6 +1081,34 @@
     <div class="dialog-foot">
       <button class="btn grow" type="button" data-close-dialog>Cancelar</button>
       <button class="btn btn-primary" id="create-link" type="button">Criar conexão</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal de confirmação do "Encerrar sessão". A ação desfaz o pareamento do
+     WhatsApp e obriga a ler um QR novo, então não pode disparar direto do
+     clique no menu. Aqui não se pede digitar o nome (nada é apagado no
+     Chatwoot e o dano se reverte pareando de novo) — só uma confirmação que
+     nomeia a conexão e diz o que vai custar. -->
+<div class="modal-wrap" id="logout-modal" role="dialog" aria-modal="true" aria-labelledby="logout-title" inert>
+  <div class="modal">
+    <div class="dialog-head">
+      <div>
+        <h2 id="logout-title">Encerrar sessão</h2>
+        <p class="hint">A conexão continua existindo; só a sessão do WhatsApp é desfeita.</p>
+      </div>
+      <button class="btn btn-ghost btn-icon btn-sm" type="button" data-close-dialog aria-label="Fechar confirmação">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+
+    <div class="dialog-body">
+      <p>Encerrar a sessão de <strong id="logout-target-name"></strong>? As mensagens param de chegar até alguém parear o número outra vez, lendo um novo QR code.</p>
+    </div>
+
+    <div class="dialog-foot">
+      <button class="btn grow" type="button" data-close-dialog>Cancelar</button>
+      <button class="btn btn-danger" id="logout-submit" type="button">Encerrar sessão</button>
     </div>
   </div>
 </div>
@@ -1327,9 +1359,42 @@
     el.setAttribute('inert', '');
     overlay.classList.remove('open');
     document.body.classList.remove('dialog-open');
-    if (dialogOpener && document.contains(dialogOpener)) dialogOpener.focus();
+    // O opener frequentemente não existe mais (ou não está visível) quando o
+    // diálogo fecha: o item do menu "⋯" que abriu a remoção volta a ficar
+    // visibility:hidden, e o cartão que continha o "Reconectar" é recriado
+    // pelo loadLinks() seguinte. Devolver o foco a um elemento nessa situação
+    // o joga no <body> — o Tab reinicia do topo e quem usa leitor de tela
+    // perde o lugar. Cai então para a lista de conexões, que é estável e é o
+    // que a ação acabou de mudar.
+    const opener = dialogOpener;
     dialogOpener = null;
+    if (isFocusable(opener)) {
+      opener.focus();
+    } else {
+      focusCardsLandmark();
+    }
     if (onClose) onClose();
+  }
+
+  // Focável de verdade: além de estar na página, precisa estar renderizado.
+  // getClientRects() sozinho não basta — um elemento com visibility:hidden
+  // continua tendo caixa de layout (é o caso do item de menu "⋯" fechado),
+  // então a visibilidade computada é checada à parte.
+  function isFocusable(el) {
+    if (!el || !document.contains(el)) return false;
+    // document.activeElement é o <body> quando nada tem foco — e é o que sobra
+    // quando o navegador tira o foco de um elemento que acabou de virar
+    // visibility:hidden (o item do menu "⋯" ao fechar). Devolver o foco a ele
+    // é um no-op silencioso: exatamente o caso que o fallback existe para pegar.
+    if (el === document.body || el === document.documentElement) return false;
+    if (el.getClientRects().length === 0) return false;
+    return getComputedStyle(el).visibility !== 'hidden';
+  }
+
+  function focusCardsLandmark() {
+    // preventScroll: o foco aqui é reparo de acessibilidade, não navegação —
+    // não deve arrastar a página por baixo do operador.
+    cardsEl.focus({ preventScroll: true });
   }
 
   overlay.addEventListener('click', closeDialog);
@@ -1525,6 +1590,11 @@
   }
 
   function renderCards(links) {
+    // Re-render destrói todos os botões dos cartões. Se o foco estava em um
+    // deles — o "Reconectar" que acabou de ser usado, um item do menu "⋯" —
+    // ele cairia no <body> e o Tab reiniciaria do topo da página. Nesse caso o
+    // foco é devolvido ao landmark da lista, que sobrevive ao render.
+    const focusWasInsideCards = cardsEl.contains(document.activeElement);
     currentLinks = links || [];
     closeCardMenu();
     cardsEl.innerHTML = '';
@@ -1537,6 +1607,7 @@
           'Use "Nova conexão" para criar a primeira.' +
           '</div>';
       }
+      if (focusWasInsideCards) focusCardsLandmark();
       return;
     }
     currentLinks.forEach((link) => {
@@ -1569,6 +1640,7 @@
         '</div>';
       cardsEl.appendChild(card);
     });
+    if (focusWasInsideCards) focusCardsLandmark();
   }
 
   /* ---------------------------------------------------------------------- */
@@ -1649,16 +1721,11 @@
     const logoutBtn = ev.target.closest('[data-logout]');
     if (logoutBtn) {
       closeCardMenu();
-      const name = logoutBtn.dataset.logout;
-      const link = currentLinks.find((l) => l.instanceName === name);
-      if (!link) return;
-      const { ok, status, data } = await instanceFetch('/instance/logout', link.instanceToken, { method: 'DELETE' });
-      if (!ok) {
-        toast('Falha ao encerrar sessão: ' + apiError(status, data), 'error');
-        return;
-      }
-      toast('Sessão encerrada para “' + name + '”.', 'ok');
-      loadLinks();
+      // Nunca dispara direto: encerrar a sessão desfaz o pareamento e obriga a
+      // ler um QR novo. O "Remover", vizinho no mesmo menu, pede o nome
+      // digitado — um rótulo não é proteção nenhuma para a ação ao lado.
+      const link = currentLinks.find((l) => l.instanceName === logoutBtn.dataset.logout);
+      if (link) openLogoutModal(link);
       return;
     }
 
@@ -1669,6 +1736,38 @@
       if (link) openRemoveModal(link);
       return;
     }
+  });
+
+  /* ---------------------------------------------------------------------- */
+  /* Modal de encerrar sessão                                                */
+  /* ---------------------------------------------------------------------- */
+  const logoutModal = document.getElementById('logout-modal');
+  const logoutSubmitBtn = document.getElementById('logout-submit');
+  const logoutTargetNameEl = document.getElementById('logout-target-name');
+  let logoutTarget = null;
+
+  function openLogoutModal(link) {
+    logoutTarget = link;
+    // textContent: o navegador nunca interpreta isto como marcação.
+    logoutTargetNameEl.textContent = link.instanceName;
+    openDialog(logoutModal);
+  }
+
+  logoutSubmitBtn.addEventListener('click', async () => {
+    if (!logoutTarget) return;
+    const name = logoutTarget.instanceName;
+    const token = logoutTarget.instanceToken;
+    setLoading(logoutSubmitBtn, true);
+    const { ok, status, data } = await instanceFetch('/instance/logout', token, { method: 'DELETE' });
+    setLoading(logoutSubmitBtn, false);
+    if (!ok) {
+      toast('Falha ao encerrar sessão: ' + apiError(status, data), 'error');
+      return;
+    }
+    logoutTarget = null;
+    closeDialog();
+    toast('Sessão encerrada para “' + name + '”.', 'ok');
+    loadLinks();
   });
 
   /* ---------------------------------------------------------------------- */
@@ -1744,8 +1843,13 @@
   // aberto (ex.: o modal de remoção) o tick é pulado inteiro: re-renderizar
   // os cards por baixo trocaria o botão que tem o foco e a máquina de diálogo
   // perderia a referência de para onde devolver o foco ao fechar.
+  //
+  // O menu "⋯" vale a mesma pausa: ele vive fora da máquina de diálogo, e
+  // renderCards() chama closeCardMenu(). Sem este guard, quem abrisse o menu e
+  // levasse 15s lendo as opções o veria fechar sozinho, com o foco (que
+  // toggleCardMenu põe no primeiro item) indo junto.
   setInterval(() => {
-    if (getApiKey() && !activeDialog) loadLinks(true);
+    if (getApiKey() && !activeDialog && !openMenuTrigger) loadLinks(true);
   }, 15000);
 
   document.getElementById('reload-links').addEventListener('click', refreshAll);
