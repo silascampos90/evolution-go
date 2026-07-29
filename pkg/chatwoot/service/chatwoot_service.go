@@ -161,9 +161,20 @@ func (s *ChatwootService) CreateLink(name string) (*CreateLinkResult, error) {
 			return nil, fmt.Errorf("criar inbox: %w", err)
 		}
 		createdInbox = true
-	} else if inbox.WebhookURL != webhookURL {
-		if err := client.UpdateInboxWebhook(inbox.ID, webhookURL); err != nil {
-			return nil, fmt.Errorf("corrigir webhook da inbox: %w", err)
+	} else {
+		// Inbox reusada: o secret só vem no payload do GET /inboxes quando o
+		// api_access_token é de um ADMINISTRADOR da conta (ver FindInboxByName).
+		// Com token de agente ele volta vazio, e aí o webhook_handler rejeita
+		// toda resposta de agente (fail closed por assinatura HMAC): a ponte
+		// ficaria só de ida, com o cartão verde e nenhum sinal de erro. Falha
+		// aqui, antes de criar a instância. A inbox NÃO é apagada — não é nossa.
+		if inbox.Secret == "" {
+			return nil, fmt.Errorf("a inbox %q já existe no Chatwoot, mas o segredo do webhook não veio na resposta: o token de API precisa ser de um administrador da conta para recuperá-lo (sem ele as respostas dos agentes seriam rejeitadas)", name)
+		}
+		if inbox.WebhookURL != webhookURL {
+			if err := client.UpdateInboxWebhook(inbox.ID, webhookURL); err != nil {
+				return nil, fmt.Errorf("corrigir webhook da inbox: %w", err)
+			}
 		}
 	}
 
