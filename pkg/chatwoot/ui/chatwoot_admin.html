@@ -49,6 +49,10 @@
     /* Texto que fica sobre botão sólido escuro — claro nos dois temas. */
     --on-solid: oklch(.985 0 0);
     --overlay-bg: oklch(0 0 0 / .45);
+    /* Moldura do QR: sempre clara, nos dois temas — é a quiet zone que o
+       leitor de QR espera, e o PNG que a API devolve já parte de um fundo
+       branco. Não redeclarada no bloco .dark por ser o mesmo valor lá. */
+    --qr-surface: oklch(1 0 0);
 
     /* Sobre --muted o --muted-foreground do Manager cai para 4.34:1. Este tom
        um pouco mais escuro vale só para texto assentado em superfície tinta
@@ -771,6 +775,64 @@
   }
 
   /* ---------------------------------------------------------------------- */
+  /* Modal de pareamento — QR e, quando a conta exige WebAuthn, o estágio de */
+  /* passkey (sem QR, só um código de verificação e um link).                */
+  /* ---------------------------------------------------------------------- */
+  .pairing-qr {
+    display: none;
+    width: 220px;
+    height: 220px;
+    max-width: 100%;
+    margin: 0 auto;
+    padding: 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--qr-surface);
+    object-fit: contain;
+  }
+
+  .pairing-qr.show { display: block; }
+
+  .passkey-box {
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 18px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--muted);
+    text-align: center;
+  }
+
+  .passkey-box.open { display: flex; }
+
+  .passkey-code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 1.4rem;
+    font-weight: 600;
+    letter-spacing: .14em;
+    overflow-wrap: anywhere;
+  }
+
+  .pairing-message {
+    margin-top: 16px;
+    text-align: center;
+    color: var(--muted-foreground);
+    text-wrap: pretty;
+  }
+
+  /* Só texto visual — não é anunciado a cada segundo (ver aria-hidden no
+     marcado). O que importa para leitor de tela é o .pairing-message,
+     que só muda em transições de estágio, não a cada tick. */
+  .pairing-countdown {
+    margin-top: 6px;
+    text-align: center;
+    font-size: 12.5px;
+    color: var(--muted-foreground);
+  }
+
+  /* ---------------------------------------------------------------------- */
   /* Toasts                                                                  */
   /* ---------------------------------------------------------------------- */
   .toasts {
@@ -1053,6 +1115,44 @@
   </div>
 </div>
 
+<!-- Modal de pareamento — QR ou, quando a conta exige, o estágio de passkey.
+     Fechar por qualquer caminho (botão, Esc, backdrop) precisa parar o
+     polling; o teardown fica preso em closeDialog() via callback (ver
+     openQrModal/teardownQrModal), não repetido em cada ponto de saída. -->
+<div class="modal-wrap" id="qr-modal" role="dialog" aria-modal="true" aria-labelledby="qr-title" inert>
+  <div class="modal">
+    <div class="dialog-head">
+      <div>
+        <h2 id="qr-title">Parear WhatsApp</h2>
+        <p class="hint">Conexão <strong id="qr-modal-name"></strong></p>
+      </div>
+      <button class="btn btn-ghost btn-icon btn-sm" type="button" data-close-dialog aria-label="Fechar pareamento">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+
+    <div class="dialog-body">
+      <img class="pairing-qr" id="pairing-qr" alt="QR code para parear o WhatsApp">
+
+      <div class="passkey-box" id="passkey-box">
+        <p class="hint">Código de verificação</p>
+        <p class="passkey-code" id="passkey-code"></p>
+        <a class="btn btn-primary" id="passkey-open" href="#" target="_blank" rel="noopener" style="display:none">
+          Abrir WhatsApp Web
+        </a>
+      </div>
+
+      <p class="pairing-message" id="pairing-message" role="status" aria-live="polite"></p>
+      <p class="pairing-countdown" id="pairing-countdown" aria-hidden="true"></p>
+    </div>
+
+    <div class="dialog-foot">
+      <button class="btn grow" type="button" data-close-dialog>Fechar</button>
+      <button class="btn btn-primary" id="pairing-retry" type="button" style="display:none">Gerar novo QR</button>
+    </div>
+  </div>
+</div>
+
 <script>
   /* ---------------------------------------------------------------------- */
   /* Helpers — apikey e chamadas HTTP                                        */
@@ -1193,8 +1293,13 @@
 
   let activeDialog = null;
   let dialogOpener = null;
+  // Teardown do diálogo atual, chamado por closeDialog() não importa como ele
+  // fechou (botão, Esc, backdrop ou closeDialog() direto). O modal de QR usa
+  // isto para garantir que stopPairingLoop() roda em todo caminho de saída,
+  // em vez de precisar lembrar de chamá-lo em cada um.
+  let dialogOnClose = null;
 
-  function openDialog(el) {
+  function openDialog(el, onClose) {
     // Só captura o opener se nenhum diálogo estiver aberto: capturar antes de
     // closeDialog() faria dialogOpener apontar para um elemento que acabou de
     // virar inert, e o restore de foco em closeDialog() falharia em silêncio.
@@ -1202,6 +1307,7 @@
     if (activeDialog) closeDialog();
     if (opener) dialogOpener = opener;
     activeDialog = el;
+    dialogOnClose = onClose || null;
     el.removeAttribute('inert');
     el.classList.add('open');
     overlay.classList.add('open');
@@ -1214,13 +1320,16 @@
   function closeDialog() {
     if (!activeDialog) return;
     const el = activeDialog;
+    const onClose = dialogOnClose;
     activeDialog = null;
+    dialogOnClose = null;
     el.classList.remove('open');
     el.setAttribute('inert', '');
     overlay.classList.remove('open');
     document.body.classList.remove('dialog-open');
     if (dialogOpener && document.contains(dialogOpener)) dialogOpener.focus();
     dialogOpener = null;
+    if (onClose) onClose();
   }
 
   overlay.addEventListener('click', closeDialog);
@@ -1519,9 +1628,10 @@
         toast('Falha ao reconectar: ' + apiError(status, data), 'error');
         return;
       }
-      // A Task 10 define openQrModal(). Até lá, degradamos com uma mensagem em vez
-      // de estourar um ReferenceError: a reconexão já aconteceu no servidor, o que
-      // falta é só a tela mostrar o QR.
+      // openQrModal() está definido logo abaixo, então este guard é hoje sempre
+      // verdadeiro; mantido mesmo assim para degradar com uma mensagem em vez de
+      // estourar um ReferenceError caso o arquivo seja um dia dividido. A
+      // reconexão já aconteceu no servidor — o que falta é só mostrar o QR.
       if (typeof openQrModal === 'function') {
         openQrModal(data.data.instanceToken, name, data.data.inboxId);
       } else {
@@ -1657,9 +1767,15 @@
       return;
     }
     closeDialog();
-    toast('Conexão “' + name + '” criada. Use Reconectar no cartão para parear o WhatsApp.', 'ok');
-    // A Task 10 abre o modal de QR aqui, com data.data.
+    toast('Conexão “' + name + '” criada.', 'ok');
     await loadLinks();
+    // Pareamento acontece na tela agora — sem isto o operador teria que
+    // clicar em Reconectar manualmente para ver o QR pela primeira vez.
+    if (typeof openQrModal === 'function') {
+      openQrModal(data.data.instanceToken, name, data.data.inboxId);
+    } else {
+      toast('Escaneie o QR pelo Manager para concluir o pareamento.', 'ok');
+    }
   });
 
   linkNameInput.addEventListener('keydown', (ev) => {
@@ -1667,7 +1783,10 @@
   });
 
   /* ---------------------------------------------------------------------- */
-  /* Pareamento — constantes e timers preservados; a Task 10 monta o modal.  */
+  /* Pareamento — modal de QR, com o estágio de passkey quando a conta exige */
+  /* WebAuthn. Nesse estágio /instance/qr não devolve QR nenhum, só um       */
+  /* código de verificação e um link para concluir a cerimônia no WhatsApp   */
+  /* Web — a tela antiga ignorava isso e ficava presa em "Gerando QR…".      */
   /* ---------------------------------------------------------------------- */
   const QR_REFRESH_MS = 20000;
   const STATUS_POLL_MS = 3000;
@@ -1675,13 +1794,143 @@
 
   let pairingTimers = { qr: null, status: null, timeout: null };
   let pairingCtx = null;
+  let pairingDeadline = null;
 
   function stopPairingLoop() {
     if (pairingTimers.qr) clearInterval(pairingTimers.qr);
     if (pairingTimers.status) clearInterval(pairingTimers.status);
-    if (pairingTimers.timeout) clearTimeout(pairingTimers.timeout);
+    if (pairingTimers.timeout) clearInterval(pairingTimers.timeout);
     pairingTimers = { qr: null, status: null, timeout: null };
   }
+
+  const qrModal = document.getElementById('qr-modal');
+  const qrModalNameEl = document.getElementById('qr-modal-name');
+  const pairingQrImg = document.getElementById('pairing-qr');
+  const pairingMessageEl = document.getElementById('pairing-message');
+  const pairingCountdownEl = document.getElementById('pairing-countdown');
+  const pairingRetryBtn = document.getElementById('pairing-retry');
+  const passkeyBoxEl = document.getElementById('passkey-box');
+  const passkeyCodeEl = document.getElementById('passkey-code');
+  const passkeyOpenLink = document.getElementById('passkey-open');
+
+  function showQr(dataUrl) {
+    passkeyBoxEl.classList.remove('open');
+    pairingQrImg.src = dataUrl;
+    pairingQrImg.classList.add('show');
+    showPairingMessage('Escaneie o QR no WhatsApp para parear.');
+  }
+
+  function showPairingMessage(text) {
+    pairingMessageEl.textContent = text || '';
+  }
+
+  // A conta exige passkey WebAuthn: não há QR neste estágio, só um código de
+  // verificação e um link para concluir a cerimônia no WhatsApp Web.
+  function showPasskeyStage(stage, openUrl, code) {
+    pairingQrImg.classList.remove('show');
+    pairingQrImg.src = '';
+    passkeyCodeEl.textContent = code || '';
+    passkeyOpenLink.href = openUrl || '#';
+    passkeyOpenLink.style.display = openUrl ? 'inline-flex' : 'none';
+    passkeyBoxEl.classList.add('open');
+    showPairingMessage('Esta conta exige passkey. Abra o WhatsApp Web e confirme com o código abaixo.');
+  }
+
+  async function refreshPairingQr(instanceToken) {
+    const { ok, data } = await instanceFetch('/instance/qr', instanceToken);
+    // A resposta pode chegar depois que o modal já fechou ou reabriu para
+    // outra instância — sem esta checagem, uma resposta atrasada da
+    // instância anterior sobrescreveria o que já está na tela.
+    if (!pairingCtx || pairingCtx.instanceToken !== instanceToken) return;
+    const payload = (ok && data && data.data) || null;
+
+    if (payload && payload.passkeyStage) {
+      showPasskeyStage(payload.passkeyStage, payload.passkeyOpenUrl, payload.passkeyCode);
+      return;
+    }
+    if (payload && payload.qrcode) {
+      showQr(payload.qrcode);
+      return;
+    }
+    showPairingMessage(ok ? 'Gerando QR…' : 'Aguardando instância iniciar…');
+  }
+
+  async function pollPairingStatus(instanceToken) {
+    const { ok, data } = await instanceFetch('/instance/status', instanceToken);
+    if (!pairingCtx || pairingCtx.instanceToken !== instanceToken) return;
+    const payload = (ok && data && data.data) || null;
+    // LoggedIn, não Connected: o socket pode estar Connected antes da sessão
+    // do WhatsApp existir. LoggedIn é o sinal de que o QR (ou a passkey) foi
+    // de fato confirmado do outro lado.
+    if (payload && payload.LoggedIn) {
+      const name = pairingCtx.instanceName;
+      closeDialog();
+      toast('Conectado “' + name + '”.', 'ok');
+      loadLinks();
+    }
+  }
+
+  function updatePairingCountdown() {
+    const remainingMs = Math.max(0, pairingDeadline - Date.now());
+    const remainingSec = Math.ceil(remainingMs / 1000);
+    pairingCountdownEl.textContent = remainingMs > 0 ? ('QR expira em ' + remainingSec + 's') : '';
+    if (remainingMs <= 0) expirePairing();
+  }
+
+  function expirePairing() {
+    stopPairingLoop();
+    pairingQrImg.classList.remove('show');
+    pairingQrImg.src = '';
+    passkeyBoxEl.classList.remove('open');
+    pairingCountdownEl.textContent = '';
+    showPairingMessage('O QR expirou.');
+    pairingRetryBtn.style.display = 'inline-flex';
+  }
+
+  function startPairingLoop() {
+    const token = pairingCtx.instanceToken;
+    refreshPairingQr(token);
+    pairingTimers.qr = setInterval(() => refreshPairingQr(token), QR_REFRESH_MS);
+    pairingTimers.status = setInterval(() => pollPairingStatus(token), STATUS_POLL_MS);
+    pairingDeadline = Date.now() + PAIRING_TIMEOUT_MS;
+    updatePairingCountdown();
+    pairingTimers.timeout = setInterval(updatePairingCountdown, 1000);
+  }
+
+  // Único callback de teardown do modal, registrado em openDialog() e
+  // disparado por closeDialog() em todo caminho de saída (botão, Esc,
+  // backdrop, ou uma chamada direta a closeDialog() ao detectar conexão).
+  function teardownQrModal() {
+    stopPairingLoop();
+    pairingCtx = null;
+  }
+
+  function openQrModal(instanceToken, instanceName, inboxId) {
+    // openDialog() fecha (e portanto tear down) um diálogo já aberto antes de
+    // abrir este — se o operador reconectar duas vezes seguidas, o loop da
+    // primeira já para antes do da segunda começar. Por isso pairingCtx só é
+    // atribuído depois de openDialog(): fazer o inverso deixaria o teardown
+    // do modal anterior apagar o contexto que acabamos de montar para o novo.
+    openDialog(qrModal, teardownQrModal);
+    pairingCtx = { instanceToken: instanceToken, instanceName: instanceName, inboxId: inboxId };
+    qrModalNameEl.textContent = instanceName;
+    pairingQrImg.classList.remove('show');
+    pairingQrImg.src = '';
+    passkeyBoxEl.classList.remove('open');
+    pairingRetryBtn.style.display = 'none';
+    pairingCountdownEl.textContent = '';
+    showPairingMessage('Gerando QR…');
+    startPairingLoop();
+  }
+
+  // Gera um QR novo sem chamar nenhum endpoint de criação — reusa o mesmo
+  // token de instância já em pairingCtx.
+  pairingRetryBtn.addEventListener('click', () => {
+    if (!pairingCtx) return;
+    pairingRetryBtn.style.display = 'none';
+    showPairingMessage('Gerando QR…');
+    startPairingLoop();
+  });
 
   /* ---------------------------------------------------------------------- */
   /* Boot                                                                     */
