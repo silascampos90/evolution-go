@@ -1346,7 +1346,7 @@ git commit -m "feat(chatwoot): expose config read, reconnect and unlink endpoint
 
 A partir daqui a tela é reescrita. Esta task entrega o esqueleto navegável: tokens, tema, header, drawer de config funcionando contra o `GET /chatwoot/config` novo.
 
-**REQUIRED SUB-SKILL:** invocar `superpowers:frontend-design` antes de escrever o HTML.
+**Antes de escrever o HTML:** se houver uma skill de design de front-end disponível no ambiente, invoque-a. Não presuma um nome — confira a lista de skills e escolha a que se aplica; `superpowers:frontend-design` foi citada em uma versão anterior deste plano e **não existe**. Sem skill aplicável, siga direto as exigências desta task.
 
 **Files:**
 - Rewrite: `pkg/chatwoot/ui/chatwoot_admin.html`
@@ -1394,7 +1394,7 @@ body {
 }
 ```
 
-O restante do CSS (botões, cards, drawer, modal, toasts, skeleton) é escrito seguindo a skill `frontend-design`, sempre referenciando estes tokens — nunca cores literais.
+O restante do CSS (botões, cards, drawer, modal, toasts, skeleton) referencia sempre estes tokens — nunca cores literais fora do bloco `:root`/`html.dark`.
 
 - [ ] **Step 2: Escrever o header e o gerenciamento de tema**
 
