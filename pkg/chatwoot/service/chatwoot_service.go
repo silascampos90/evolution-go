@@ -14,24 +14,26 @@ import (
 	logger_wrapper "github.com/evolution-foundation/evolution-go/pkg/logger"
 )
 
-// instanceCreator é o subconjunto de instance_service.InstanceService usado por
+// instanceManager é o subconjunto de instance_service.InstanceService usado por
 // este service. Definido localmente (idioma Go "accept interfaces, return
 // structs") para que os testes não precisem fakear a interface inteira.
-type instanceCreator interface {
+type instanceManager interface {
 	Create(data *instance_service.CreateStruct) (*instance_model.Instance, error)
+	Connect(data *instance_service.ConnectStruct, instance *instance_model.Instance) (*instance_model.Instance, string, string, error)
 }
 
 // linkInstanceRepo é o subconjunto de instance_repository.InstanceRepository
 // usado por este service.
 type linkInstanceRepo interface {
 	GetAll(clientName string) ([]*instance_model.Instance, error)
+	GetInstanceByName(name string) (*instance_model.Instance, error)
 	Update(*instance_model.Instance) error
 }
 
 type ChatwootService struct {
 	configRepo    chatwoot_repository.ChatwootConfigRepository
 	instanceRepo  linkInstanceRepo
-	instanceSvc   instanceCreator
+	instanceSvc   instanceManager
 	selfBaseURL   string // ex http://evolution-go:8080
 	clientName    string
 	loggerWrapper *logger_wrapper.LoggerManager
@@ -40,7 +42,7 @@ type ChatwootService struct {
 func NewChatwootService(
 	configRepo chatwoot_repository.ChatwootConfigRepository,
 	instanceRepo linkInstanceRepo,
-	instanceSvc instanceCreator,
+	instanceSvc instanceManager,
 	selfBaseURL string,
 	clientName string,
 	loggerWrapper *logger_wrapper.LoggerManager,
@@ -101,6 +103,13 @@ type CreateLinkResult struct {
 }
 
 func (s *ChatwootService) CreateLink(name string) (*CreateLinkResult, error) {
+	// Valida o conflito de nome ANTES de tocar no Chatwoot. A ordem importa:
+	// instanceSvc.Create rejeita nome repetido, e criar a inbox primeiro fazia
+	// cada tentativa de reconexão abandonar uma inbox órfã no Chatwoot.
+	if existing, err := s.instanceRepo.GetInstanceByName(name); err == nil && existing != nil {
+		return nil, fmt.Errorf("já existe uma conexão chamada %q; use Reconectar em vez de criar outra", name)
+	}
+
 	cfg, err := s.configRepo.Get()
 	if err != nil {
 		return nil, err
@@ -111,15 +120,40 @@ func (s *ChatwootService) CreateLink(name string) (*CreateLinkResult, error) {
 	client := chatwoot_client.NewClient(cfg.BaseURL, cfg.APIToken, cfg.AccountID)
 
 	webhookURL := fmt.Sprintf("%s/chatwoot/webhook/%s", s.selfBaseURL, name)
-	inbox, err := client.CreateInbox(name, webhookURL)
+
+	// Find-or-create da inbox. Só marcamos para rollback a inbox que nós mesmos
+	// criamos nesta chamada — uma inbox preexistente nunca é apagada aqui.
+	inbox, err := client.FindInboxByName(name)
 	if err != nil {
-		return nil, fmt.Errorf("criar inbox: %w", err)
+		return nil, fmt.Errorf("procurar inbox: %w", err)
+	}
+	createdInbox := false
+	if inbox == nil {
+		inbox, err = client.CreateInbox(name, webhookURL)
+		if err != nil {
+			return nil, fmt.Errorf("criar inbox: %w", err)
+		}
+		createdInbox = true
+	} else if inbox.WebhookURL != webhookURL {
+		if err := client.UpdateInboxWebhook(inbox.ID, webhookURL); err != nil {
+			return nil, fmt.Errorf("corrigir webhook da inbox: %w", err)
+		}
+	}
+
+	rollback := func() {
+		if !createdInbox {
+			return
+		}
+		if err := client.DeleteInbox(inbox.ID); err != nil {
+			s.loggerWrapper.GetLogger("chatwoot").LogError("chatwoot: falha ao remover inbox órfã %d: %v", inbox.ID, err)
+		}
 	}
 
 	// Cria a instância reusando o service existente.
 	token := name + "-" + randToken()
 	created, err := s.instanceSvc.Create(&instance_service.CreateStruct{Name: name, Token: token})
 	if err != nil {
+		rollback()
 		return nil, fmt.Errorf("criar instância: %w", err)
 	}
 
@@ -133,6 +167,7 @@ func (s *ChatwootService) CreateLink(name string) (*CreateLinkResult, error) {
 	// available; without this the bridge sends "inactive" receipts (one check).
 	created.AlwaysOnline = true
 	if err := s.instanceRepo.Update(created); err != nil {
+		rollback()
 		return nil, fmt.Errorf("persistir vínculo: %w", err)
 	}
 
