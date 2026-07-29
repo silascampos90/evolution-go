@@ -229,21 +229,27 @@ func (c *Client) FindContactByPhone(phone string) (*Contact, error) {
 }
 
 // FindOpenConversation retorna o display_id da primeira conversa com status
-// "open" do contato, se houver. O display_id é o mesmo valor usado em
+// "open" do contato **naquela inbox**. O display_id é o mesmo valor usado em
 // /conversations/{id}/messages, retornado por CreateConversation.
-func (c *Client) FindOpenConversation(contactID int) (int, bool, error) {
+//
+// O filtro por inbox é obrigatório: GET /contacts/{id}/conversations devolve
+// conversas de TODAS as inboxes da conta. Sem ele, uma mensagem que chega por
+// uma inbox seria injetada numa conversa de outra, e a resposta do agente
+// sairia pelo número de WhatsApp errado.
+func (c *Client) FindOpenConversation(contactID, inboxID int) (int, bool, error) {
 	path := fmt.Sprintf("/contacts/%d/conversations", contactID)
 	var raw struct {
 		Payload []struct {
-			ID     int    `json:"id"`
-			Status string `json:"status"`
+			ID      int    `json:"id"`
+			InboxID int    `json:"inbox_id"`
+			Status  string `json:"status"`
 		} `json:"payload"`
 	}
 	if err := c.do(http.MethodGet, path, nil, &raw); err != nil {
 		return 0, false, err
 	}
 	for _, conv := range raw.Payload {
-		if conv.Status == "open" {
+		if conv.Status == "open" && conv.InboxID == inboxID {
 			return conv.ID, true, nil
 		}
 	}

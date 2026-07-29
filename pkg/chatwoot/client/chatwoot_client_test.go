@@ -133,16 +133,16 @@ func TestFindOpenConversationReturnsOpenOne(t *testing.T) {
 		}
 		json.NewEncoder(w).Encode(map[string]any{
 			"payload": []map[string]any{
-				{"id": 10, "status": "resolved"},
-				{"id": 45, "status": "open"},
-				{"id": 99, "status": "open"},
+				{"id": 10, "inbox_id": 42, "status": "resolved"},
+				{"id": 45, "inbox_id": 42, "status": "open"},
+				{"id": 99, "inbox_id": 42, "status": "open"},
 			},
 		})
 	}))
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "tok", "1")
-	convID, ok, err := c.FindOpenConversation(123)
+	convID, ok, err := c.FindOpenConversation(123, 42)
 	if err != nil {
 		t.Fatalf("FindOpenConversation: %v", err)
 	}
@@ -155,19 +155,67 @@ func TestFindOpenConversationReturnsFalseWhenNoneOpen(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"payload": []map[string]any{
-				{"id": 10, "status": "resolved"},
+				{"id": 10, "inbox_id": 42, "status": "resolved"},
 			},
 		})
 	}))
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "tok", "1")
-	convID, ok, err := c.FindOpenConversation(123)
+	convID, ok, err := c.FindOpenConversation(123, 42)
 	if err != nil {
 		t.Fatalf("FindOpenConversation: %v", err)
 	}
 	if ok || convID != 0 {
 		t.Fatalf("expected no open conversation, got convID=%d ok=%v", convID, ok)
+	}
+}
+
+func TestFindOpenConversationIgnoresOtherInboxes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/accounts/1/contacts/123/conversations" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"payload": []map[string]any{
+				{"id": 900, "inbox_id": 99, "status": "open"},
+				{"id": 901, "inbox_id": 42, "status": "resolved"},
+				{"id": 902, "inbox_id": 42, "status": "open"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "tok", "1")
+	id, ok, err := c.FindOpenConversation(123, 42)
+	if err != nil {
+		t.Fatalf("FindOpenConversation: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected to find an open conversation in inbox 42")
+	}
+	if id != 902 {
+		t.Fatalf("expected conversation 902 (inbox 42, open), got %d", id)
+	}
+}
+
+func TestFindOpenConversationReturnsFalseWhenOnlyOtherInboxHasOpen(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"payload": []map[string]any{
+				{"id": 900, "inbox_id": 99, "status": "open"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "tok", "1")
+	_, ok, err := c.FindOpenConversation(123, 42)
+	if err != nil {
+		t.Fatalf("FindOpenConversation: %v", err)
+	}
+	if ok {
+		t.Fatal("expected no match: the only open conversation belongs to another inbox")
 	}
 }
 
