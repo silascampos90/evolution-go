@@ -1443,7 +1443,23 @@ O `PUT /chatwoot/config` continua exigindo os três campos. Se o operador deixar
 
 - [ ] **Step 5: Definir os helpers compartilhados**
 
-Preservar do arquivo atual, sem alteração: `apiFetch`, `instanceFetch`, `escapeHtml` e `displayNumber` (`chatwoot_admin.html:255-267`, `:324-337`, `:445-449`, `:470-474`). Eles já fazem o certo e as Tasks 9-10 dependem deles.
+Preservar do arquivo atual: `apiFetch`, `instanceFetch` e `displayNumber` (`chatwoot_admin.html:255-267`, `:324-337`, `:470-474`). As Tasks 9-10 dependem deles.
+
+`escapeHtml` precisa ser **endurecido**, não preservado como está. O original escapa via `textContent`→`innerHTML`, o que cobre `&`, `<` e `>` e **não** cobre `"`. Como o valor é interpolado dentro de atributos (`href`, `data-*`, `title`) nas Tasks 9-10, sem escapar aspas um valor hostil fecha o atributo e injeta um handler de evento:
+
+```js
+// Escapa também aspas: este helper é usado dentro de ATRIBUTOS (href, data-*,
+// title), onde escapar só &<> deixa o atributo ser fechado e um handler
+// injetado. textContent/innerHTML sozinho não cobre isso.
+function escapeHtml(str) {
+  return String(str == null ? '' : str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+```
 
 Definir os dois novos, usados pelas Tasks 9-10:
 
@@ -1459,9 +1475,15 @@ function setConfigBadge(configured) {
 }
 
 // Link direto para a inbox no Chatwoot, montado a partir da config carregada.
+//
+// O baseUrl vem do banco e o backend só valida que não é vazio
+// (admin_handler.go:34), então o esquema é conferido aqui: sem isso um
+// baseUrl "javascript:..." viraria um link executável que o operador é
+// convidado a clicar.
 function inboxUrl(inboxId) {
-  if (!chatwootConfig.baseUrl) return '#';
-  return chatwootConfig.baseUrl.replace(/\/$/, '') +
+  const base = (chatwootConfig.baseUrl || '').trim();
+  if (!/^https?:\/\//i.test(base)) return '#';
+  return base.replace(/\/$/, '') +
     '/app/accounts/' + encodeURIComponent(chatwootConfig.accountId) +
     '/inbox/' + encodeURIComponent(inboxId);
 }
