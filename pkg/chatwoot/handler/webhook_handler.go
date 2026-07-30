@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -74,7 +75,7 @@ func fileTypeToMediaType(fileType string) string {
 // Só encaminha mensagens outgoing, não-privadas, de message_created.
 // shouldForward também devolve os anexos e os ids (mid, cid) usados para
 // gravar o mapa wamid->(conversationID, messageID).
-func shouldForward(body []byte) (jid, text string, attachments []outAttachment, mid, cid int, ok bool) {
+func shouldForward(body []byte) (sourceID, phone, text string, attachments []outAttachment, mid, cid int, ok bool) {
 	var p struct {
 		Event        string          `json:"event"`
 		MessageType  string          `json:"message_type"`
@@ -87,22 +88,67 @@ func shouldForward(body []byte) (jid, text string, attachments []outAttachment, 
 			ContactInbox struct {
 				SourceID string `json:"source_id"`
 			} `json:"contact_inbox"`
+			Meta struct {
+				Sender struct {
+					PhoneNumber string `json:"phone_number"`
+				} `json:"sender"`
+			} `json:"meta"`
 		} `json:"conversation"`
 	}
 	if err := json.Unmarshal(body, &p); err != nil {
-		return "", "", nil, 0, 0, false
+		return "", "", "", nil, 0, 0, false
 	}
 	if p.Event != "message_created" || p.MessageType != "outgoing" || p.Private {
-		return "", "", nil, 0, 0, false
-	}
-	if p.Conversation.ContactInbox.SourceID == "" {
-		return "", "", nil, 0, 0, false
+		return "", "", "", nil, 0, 0, false
 	}
 	// Precisa ter conteúdo OU anexo.
 	if p.Content == "" && len(p.Attachments) == 0 {
-		return "", "", nil, 0, 0, false
+		return "", "", "", nil, 0, 0, false
 	}
-	return p.Conversation.ContactInbox.SourceID, p.Content, p.Attachments, p.ID, p.Conversation.ID, true
+	// Devolve os dois candidatos crus; quem resolve é o Handle, para poder
+	// responder com erro visível quando nenhum serve — em vez de descartar em
+	// silêncio uma mensagem que o agente acha que enviou.
+	return p.Conversation.ContactInbox.SourceID, p.Conversation.Meta.Sender.PhoneNumber,
+		p.Content, p.Attachments, p.ID, p.Conversation.ID, true
+}
+
+// resolveNumber decide para qual número enviar no WhatsApp.
+//
+// O source_id do contact_inbox só é o JID quando foi o nosso producer que criou
+// o vínculo. Para inboxes Channel::Api o Chatwoot gera SecureRandom.uuid quando
+// ninguém informa um source_id (contact_inbox_builder.rb), o que acontece toda
+// vez que a conversa nasce do lado do Chatwoot. Mandar esse UUID como número
+// fazia o whatsmeow queimar as 3 tentativas do sendTextWithRetry com sleeps, e
+// o Chatwoot desistia antes disso com Net::ReadTimeout — um erro que não dizia
+// nada sobre a causa.
+//
+// Então: usa o source_id se ele tiver cara de número; senão cai para o telefone
+// do contato, que vem no payload em conversation.meta.sender.phone_number.
+func resolveNumber(sourceID, phoneNumber string) (string, bool) {
+	if n, ok := digitsOnly(sourceID); ok {
+		return n, true
+	}
+	return digitsOnly(phoneNumber)
+}
+
+// digitsOnly extrai o número de um JID ("5511999@s.whatsapp.net"), de um E.164
+// ("+5511999") ou de um número cru. Devolve false para qualquer coisa que não
+// seja plausivelmente um telefone — UUID, e-mail, vazio.
+func digitsOnly(raw string) (string, bool) {
+	s := raw
+	if i := strings.IndexByte(s, '@'); i >= 0 {
+		s = s[:i]
+	}
+	s = strings.TrimPrefix(s, "+")
+	if len(s) < 8 || len(s) > 20 {
+		return "", false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return "", false
+		}
+	}
+	return s, true
 }
 
 func (h *WebhookHandler) Handle(ctx *gin.Context) {
@@ -126,15 +172,21 @@ func (h *WebhookHandler) Handle(ctx *gin.Context) {
 		return
 	}
 
-	jid, text, attachments, mid, cid, ok := shouldForward(body)
+	sourceID, phone, text, attachments, mid, cid, ok := shouldForward(body)
 	if !ok {
 		ctx.JSON(http.StatusOK, gin.H{"status": "ignored"})
 		return
 	}
 
-	number := jid
-	if i := strings.IndexByte(number, '@'); i >= 0 {
-		number = number[:i]
+	number, ok := resolveNumber(sourceID, phone)
+	if !ok {
+		// Falha rápido e explícita: sem isso o número inválido ia para o
+		// whatsmeow, que gasta ~15s em retries, e o Chatwoot desistia antes com
+		// Net::ReadTimeout — erro que não diz nada sobre a causa.
+		msg := fmt.Sprintf("não foi possível determinar o número: source_id=%q e telefone do contato=%q não parecem um número de WhatsApp", sourceID, phone)
+		h.loggerWrapper.GetLogger(instance.Id).LogError("[%s] chatwoot->wa: %s", instance.Id, msg)
+		ctx.JSON(http.StatusUnprocessableEntity, gin.H{"error": msg})
+		return
 	}
 
 	if len(attachments) == 0 {

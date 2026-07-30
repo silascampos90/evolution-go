@@ -284,6 +284,57 @@ func (s *ChatwootService) ReconnectLink(name string) (*ReconnectResult, error) {
 	}, nil
 }
 
+// SetInbox aponta uma conexão existente para outra inbox, escolhida pelo id.
+//
+// Existe porque casar por nome é ambíguo: duas inboxes podem ter o mesmo nome, e
+// o FindInboxByName pega a primeira do payload — a conexão pode acabar vinculada
+// a uma inbox diferente da que o operador vê na tela. Aqui o id manda.
+//
+// Não cria nem apaga inbox nenhuma: só troca o vínculo e corrige o webhook da
+// inbox de destino para apontar para esta instância.
+func (s *ChatwootService) SetInbox(name string, inboxID int) error {
+	instance, err := s.instanceRepo.GetInstanceByName(name)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return fmt.Errorf("buscar instância: %w", err)
+	}
+	if instance == nil {
+		return fmt.Errorf("%w: %q", ErrLinkNotFound, name)
+	}
+
+	cfg, err := s.configRepo.Get()
+	if err != nil {
+		return err
+	}
+	if cfg == nil {
+		return fmt.Errorf("config do chatwoot ausente")
+	}
+	client := chatwoot_client.NewClient(cfg.BaseURL, cfg.APIToken, cfg.AccountID)
+
+	inbox, err := client.GetInboxByID(inboxID)
+	if err != nil {
+		return fmt.Errorf("buscar inbox %d: %w", inboxID, err)
+	}
+	// Mesma disciplina do CreateLink ao reusar inbox: sem o secret o receiver
+	// rejeita todo webhook do Chatwoot por HMAC, e a ponte fica muda só no
+	// sentido de saída — sem nenhum sinal na tela.
+	if inbox.Secret == "" {
+		return fmt.Errorf("a inbox %d não devolveu o secret do webhook; o token da API precisa ser de um administrador da conta", inboxID)
+	}
+
+	webhookURL := fmt.Sprintf("%s/chatwoot/webhook/%s", s.selfBaseURL, name)
+	if inbox.WebhookURL != webhookURL {
+		if err := client.UpdateInboxWebhook(inbox.ID, webhookURL); err != nil {
+			return fmt.Errorf("apontar o webhook da inbox para esta instância: %w", err)
+		}
+	}
+
+	instance.ChatwootEnabled = true
+	instance.ChatwootInboxID = fmt.Sprintf("%d", inbox.ID)
+	instance.ChatwootInboxIdentifier = inbox.Identifier
+	instance.ChatwootWebhookSecret = inbox.Secret
+	return s.instanceRepo.Update(instance)
+}
+
 type ConfigView struct {
 	BaseURL        string `json:"baseUrl"`
 	AccountID      string `json:"accountId"`

@@ -24,6 +24,7 @@ func Register(eng *gin.Engine, admin *chatwoot_handler.AdminHandler, webhook *ch
 		api.GET("/links", admin.GetLinks)
 		api.POST("/links", admin.PostLink)
 		api.POST("/links/:instance/reconnect", admin.PostReconnect)
+		api.PUT("/links/:instance/inbox", admin.PutInbox)
 		api.DELETE("/links/:instance", admin.DeleteLink)
 	}
 }
