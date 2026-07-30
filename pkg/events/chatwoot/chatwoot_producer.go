@@ -302,7 +302,10 @@ func (p *chatwootProducer) handle(payload []byte, userID string) {
 	client := chatwoot_client.NewClient(cfg.BaseURL, cfg.APIToken, cfg.AccountID)
 	inboxID := atoi(instance.ChatwootInboxID)
 
-	cacheKey := msg.InstanceID + "|" + msg.JID
+	// A inbox entra na chave de propósito: se o operador trocar a inbox da
+	// conexão, as entradas antigas simplesmente deixam de ser lidas em vez de
+	// injetarem mensagens na conversa da inbox anterior.
+	cacheKey := msg.InstanceID + "|" + instance.ChatwootInboxID + "|" + msg.JID
 	if v, ok := p.convCache.Load(cacheKey); ok {
 		entry := v.(convCacheEntry)
 		p.inject(client, entry.ConversationID, msg, log, userID)

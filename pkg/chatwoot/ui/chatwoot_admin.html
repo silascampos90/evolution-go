@@ -1101,6 +1101,37 @@
      clique no menu. Aqui não se pede digitar o nome (nada é apagado no
      Chatwoot e o dano se reverte pareando de novo) — só uma confirmação que
      nomeia a conexão e diz o que vai custar. -->
+<!-- Modal de alterar inbox — por ID, não por nome: duas inboxes podem ter o
+     mesmo nome e o casamento por nome pega a primeira do payload. -->
+<div class="modal-wrap" id="inbox-modal" role="dialog" aria-modal="true" aria-labelledby="inbox-title" inert>
+  <div class="modal">
+    <div class="dialog-head">
+      <div>
+        <h2 id="inbox-title">Alterar inbox</h2>
+        <p class="hint">Aponta a conexão para outra caixa de entrada do Chatwoot.</p>
+      </div>
+      <button class="btn btn-ghost btn-icon btn-sm" type="button" data-close-dialog aria-label="Fechar">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+
+    <div class="dialog-body">
+      <p>Conexão <strong id="inbox-target-name"></strong>, hoje na inbox <strong id="inbox-target-current"></strong>.</p>
+      <div class="field">
+        <label class="label" for="inbox-id-input">ID da nova inbox</label>
+        <input class="input" type="text" id="inbox-id-input" inputmode="numeric" autocomplete="off" placeholder="6">
+        <p class="hint">O número que aparece na URL do Chatwoot, em <code>/app/accounts/1/inbox/&lt;id&gt;</code>. Precisa ser uma inbox do tipo API.</p>
+      </div>
+      <p class="note">Nada é criado nem apagado: só o vínculo muda, e o webhook da inbox de destino passa a apontar para esta instância.</p>
+    </div>
+
+    <div class="dialog-foot">
+      <button class="btn grow" type="button" data-close-dialog>Cancelar</button>
+      <button class="btn btn-primary" id="inbox-submit" type="button" disabled>Alterar inbox</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-wrap" id="logout-modal" role="dialog" aria-modal="true" aria-labelledby="logout-title" inert>
   <div class="modal">
     <div class="dialog-head">
@@ -1663,6 +1694,7 @@
               '</svg>' +
             '</button>' +
             '<div class="card-menu">' +
+              '<button type="button" data-set-inbox="' + name + '">Alterar inbox</button>' +
               '<button type="button" data-logout="' + name + '">Encerrar sessão</button>' +
               '<button type="button" class="danger" data-remove="' + name + '">Remover</button>' +
             '</div>' +
@@ -1766,6 +1798,14 @@
       return;
     }
 
+    const inboxBtn = ev.target.closest('[data-set-inbox]');
+    if (inboxBtn) {
+      closeCardMenu();
+      const link = currentLinks.find((l) => l.instanceName === inboxBtn.dataset.setInbox);
+      if (link) openInboxModal(link);
+      return;
+    }
+
     const removeBtn = ev.target.closest('[data-remove]');
     if (removeBtn) {
       closeCardMenu();
@@ -1773,6 +1813,49 @@
       if (link) openRemoveModal(link);
       return;
     }
+  });
+
+  /* ---------------------------------------------------------------------- */
+  /* Modal de alterar inbox                                                   */
+  /* ---------------------------------------------------------------------- */
+  const inboxModal = document.getElementById('inbox-modal');
+  const inboxIdInput = document.getElementById('inbox-id-input');
+  const inboxSubmitBtn = document.getElementById('inbox-submit');
+  let inboxTarget = null;
+
+  function openInboxModal(link) {
+    inboxTarget = link;
+    document.getElementById('inbox-target-name').textContent = link.instanceName;
+    document.getElementById('inbox-target-current').textContent = '#' + link.inboxId;
+    inboxIdInput.value = '';
+    inboxSubmitBtn.disabled = true;
+    openDialog(inboxModal, () => { inboxTarget = null; });
+  }
+
+  // Só habilita para um id numérico diferente do atual: trocar pela mesma inbox
+  // não faria nada e só confundiria.
+  inboxIdInput.addEventListener('input', () => {
+    const v = inboxIdInput.value.trim();
+    inboxSubmitBtn.disabled = !inboxTarget || !/^[0-9]+$/.test(v) || v === String(inboxTarget.inboxId);
+  });
+
+  inboxSubmitBtn.addEventListener('click', async () => {
+    if (!inboxTarget || inboxSubmitBtn.disabled) return;
+    const name = inboxTarget.instanceName;
+    const inboxId = parseInt(inboxIdInput.value.trim(), 10);
+    setLoading(inboxSubmitBtn, true);
+    const { ok, status, data } = await apiFetch(
+      '/chatwoot/links/' + encodeURIComponent(name) + '/inbox',
+      { method: 'PUT', body: JSON.stringify({ inboxId: inboxId }) }
+    );
+    setLoading(inboxSubmitBtn, false);
+    if (!ok) {
+      toast('Não alterou a inbox: ' + apiError(status, data), 'error');
+      return;
+    }
+    closeDialog();
+    toast('“' + name + '” agora está na inbox #' + inboxId + '.', 'ok');
+    loadLinks();
   });
 
   /* ---------------------------------------------------------------------- */

@@ -131,6 +131,36 @@ func (c *Client) FindInboxByName(name string) (*Inbox, error) {
 	return nil, nil
 }
 
+// GetInboxByID busca uma inbox pelo id. Usado quando o operador escolhe a inbox
+// explicitamente, em vez de deixarmos casar por nome — que é ambíguo quando há
+// duas inboxes com o mesmo nome.
+//
+// Como no FindInboxByName, secret e inbox_identifier só vêm quando o
+// api_access_token é de um administrador da conta.
+func (c *Client) GetInboxByID(inboxID int) (*Inbox, error) {
+	var raw struct {
+		ID          int    `json:"id"`
+		Name        string `json:"name"`
+		ChannelType string `json:"channel_type"`
+		Identifier  string `json:"inbox_identifier"`
+		Secret      string `json:"secret"`
+		WebhookURL  string `json:"webhook_url"`
+	}
+	if err := c.do(http.MethodGet, fmt.Sprintf("/inboxes/%d", inboxID), nil, &raw); err != nil {
+		return nil, err
+	}
+	if raw.ChannelType != "Channel::Api" {
+		return nil, fmt.Errorf("a inbox %d é do tipo %s; a integração só funciona com inbox do tipo API", inboxID, raw.ChannelType)
+	}
+	return &Inbox{
+		ID:         raw.ID,
+		Identifier: raw.Identifier,
+		Secret:     raw.Secret,
+		Name:       raw.Name,
+		WebhookURL: raw.WebhookURL,
+	}, nil
+}
+
 // UpdateInboxWebhook corrige o webhook_url de uma inbox Channel::Api existente.
 // Usado ao reusar uma inbox cujo webhook aponta para uma URL antiga do evolution-go.
 func (c *Client) UpdateInboxWebhook(inboxID int, webhookURL string) error {

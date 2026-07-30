@@ -10,7 +10,7 @@ func TestShouldForward_OutgoingText(t *testing.T) {
 		"content":"bom dia!",
 		"conversation":{"contact_inbox":{"source_id":"5511988880001@s.whatsapp.net"}}
 	}`)
-	jid, text, _, _, _, ok := shouldForward(body)
+	jid, _, text, _, _, _, ok := shouldForward(body)
 	if !ok || jid != "5511988880001@s.whatsapp.net" || text != "bom dia!" {
 		t.Fatalf("expected forward; got jid=%q text=%q ok=%v", jid, text, ok)
 	}
@@ -18,14 +18,14 @@ func TestShouldForward_OutgoingText(t *testing.T) {
 
 func TestShouldForward_IgnoresIncoming(t *testing.T) {
 	body := []byte(`{"event":"message_created","message_type":"incoming","private":false,"content":"olá","conversation":{"contact_inbox":{"source_id":"x"}}}`)
-	if _, _, _, _, _, ok := shouldForward(body); ok {
+	if _, _, _, _, _, _, ok := shouldForward(body); ok {
 		t.Fatal("expected ok=false for incoming (anti-echo)")
 	}
 }
 
 func TestShouldForward_IgnoresPrivateNote(t *testing.T) {
 	body := []byte(`{"event":"message_created","message_type":"outgoing","private":true,"content":"nota","conversation":{"contact_inbox":{"source_id":"x"}}}`)
-	if _, _, _, _, _, ok := shouldForward(body); ok {
+	if _, _, _, _, _, _, ok := shouldForward(body); ok {
 		t.Fatal("expected ok=false for private note")
 	}
 }
@@ -36,7 +36,7 @@ func TestShouldForward_WithAttachment(t *testing.T) {
 		"conversation":{"contact_inbox":{"source_id":"5511988880001@s.whatsapp.net"}},
 		"attachments":[{"data_url":"http://localhost:3100/rails/x/foto.png","file_type":"image","extension":"png","content_type":"image/png"}]
 	}`)
-	jid, text, atts, _, _, ok := shouldForward(body)
+	jid, _, text, atts, _, _, ok := shouldForward(body)
 	if !ok || jid != "5511988880001@s.whatsapp.net" || text != "veja" || len(atts) != 1 {
 		t.Fatalf("bad: jid=%q text=%q atts=%d ok=%v", jid, text, len(atts), ok)
 	}
@@ -56,7 +56,7 @@ func TestFileTypeToMediaType(t *testing.T) {
 
 func TestShouldForward_TextOnlyStillWorks(t *testing.T) {
 	body := []byte(`{"event":"message_created","message_type":"outgoing","private":false,"content":"oi","conversation":{"contact_inbox":{"source_id":"x"}}}`)
-	_, text, atts, _, _, ok := shouldForward(body)
+	_, _, text, atts, _, _, ok := shouldForward(body)
 	if !ok || text != "oi" || len(atts) != 0 {
 		t.Fatalf("texto puro quebrou: text=%q atts=%d ok=%v", text, len(atts), ok)
 	}
@@ -68,7 +68,7 @@ func TestShouldForward_ExtractsIds(t *testing.T) {
 		"id":11,
 		"conversation":{"id":2,"contact_inbox":{"source_id":"5511988880001@s.whatsapp.net"}}
 	}`)
-	jid, text, atts, mid, cid, ok := shouldForward(body)
+	jid, _, text, atts, mid, cid, ok := shouldForward(body)
 	if !ok || jid == "" || text != "oi" || len(atts) != 0 || mid != 11 || cid != 2 {
 		t.Fatalf("bad: mid=%d cid=%d ok=%v", mid, cid, ok)
 	}
@@ -85,5 +85,34 @@ func TestValidSignature(t *testing.T) {
 	}
 	if validSignature(secret, ts, body, "sha256=deadbeef") {
 		t.Fatal("expected invalid signature to fail")
+	}
+}
+
+// TestResolveNumber é a regressão do defeito de produção: o Chatwoot gera
+// SecureRandom.uuid como source_id de inboxes Channel::Api quando a conversa
+// nasce do lado dele (contact_inbox_builder.rb). Esse UUID ia direto como
+// número para o whatsmeow, que gastava ~15s em retries até o Chatwoot desistir
+// com Net::ReadTimeout.
+func TestResolveNumber(t *testing.T) {
+	cases := []struct {
+		name     string
+		sourceID string
+		phone    string
+		want     string
+		wantOK   bool
+	}{
+		{"jid do producer", "5511988880001@s.whatsapp.net", "", "5511988880001", true},
+		{"uuid cai para o telefone do contato", "d7361718-700b-40e2-be7a-7c1bba0827d8", "+557193549090", "557193549090", true},
+		{"uuid sem telefone falha em vez de enviar lixo", "d7361718-700b-40e2-be7a-7c1bba0827d8", "", "", false},
+		{"source_id cru sem sufixo", "557193549090", "", "557193549090", true},
+		{"vazio dos dois lados", "", "", "", false},
+		{"telefone curto demais não é telefone", "123", "456", "", false},
+	}
+	for _, c := range cases {
+		got, ok := resolveNumber(c.sourceID, c.phone)
+		if got != c.want || ok != c.wantOK {
+			t.Errorf("%s: resolveNumber(%q,%q) = (%q,%v), want (%q,%v)",
+				c.name, c.sourceID, c.phone, got, ok, c.want, c.wantOK)
+		}
 	}
 }

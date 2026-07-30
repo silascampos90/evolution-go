@@ -136,3 +136,24 @@ func (h *AdminHandler) DeleteLink(ctx *gin.Context) {
 	}
 	ctx.JSON(http.StatusOK, gin.H{"status": "deleted"})
 }
+
+// PutInbox troca a inbox de uma conexão existente, por id.
+func (h *AdminHandler) PutInbox(ctx *gin.Context) {
+	name := ctx.Param("instance")
+	var body struct {
+		InboxID int `json:"inboxId"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil || body.InboxID <= 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "inboxId é obrigatório e deve ser um número positivo"})
+		return
+	}
+	if err := h.service.SetInbox(name, body.InboxID); err != nil {
+		if errors.Is(err, chatwoot_service.ErrLinkNotFound) {
+			ctx.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"status": "updated"})
+}
